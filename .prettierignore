@@ -1,0 +1,9 @@
+node_modules
+dist
+.wrangler
+.qa
+scripts/maps/.qa
+scripts/maps/.tools
+package-lock.json
+public/map-assets
+public/maps

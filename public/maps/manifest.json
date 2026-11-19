@@ -1,0 +1,241 @@
+{
+  "id": "astana-20261117",
+  "city": "Астана",
+  "url": "/maps/astana-20261117.pmtiles",
+  "bytes": 9775568,
+  "sha256": "9569ecfc21b687bb6e6b6e4b0ca4e48e5421a749045d47563f7bd9aa2c8f300b",
+  "bounds": [
+    71.2179735,
+    50.8576076,
+    71.7851913,
+    51.3511101
+  ],
+  "center": [
+    71.4304,
+    51.1282
+  ],
+  "minZoom": 0,
+  "maxZoom": 15,
+  "attribution": "© OpenStreetMap contributors · Protomaps",
+  "source": "https://build.protomaps.com/20261117.pmtiles",
+  "dataDate": "2026-11-17",
+  "generatedAt": "2026-11-19T14:40:08.329Z",
+  "tilesetVersion": "4.15.2",
+  "assetCommit": "028c18f713baecad011301ff7a69acc39bcc2ae7",
+  "supportAssets": [
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Italic/0-255.pbf",
+      "bytes": 79344,
+      "sha256": "43edfca91c285ba1226f09d5e74d68e1473a088c517f02a5212ff6ccb10037dc"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Italic/1024-1279.pbf",
+      "bytes": 128015,
+      "sha256": "9c3f67dce1f538ee635405a5562c364c95ba4db06a6b312a45c84ad6edf4c28a"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Italic/1280-1535.pbf",
+      "bytes": 26727,
+      "sha256": "12c88da54998281f49363094120d158ab9fd956573c724f632aa6745be998566"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Italic/256-511.pbf",
+      "bytes": 132976,
+      "sha256": "a6f9f6574c86a4a28aba630ca1017857ceadd2370ed32a1293c35f819ab9bd60"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Italic/512-767.pbf",
+      "bytes": 96460,
+      "sha256": "5849298255f12639422a8b8ef32927b1ac49d59f725afaa6cbaf51550a5752fe"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Italic/65024-65279.pbf",
+      "bytes": 2551,
+      "sha256": "6c9650e1ed03a49c48b76eae58b794bf392a8516d3ebba644b7e7dd95414b77d"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Italic/768-1023.pbf",
+      "bytes": 71308,
+      "sha256": "52bfd64775b91f7847da983b7bbc277135e006423cec22a44499e03e182e614e"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Italic/8192-8447.pbf",
+      "bytes": 52891,
+      "sha256": "5dc4e6680116fef01be024e272859d130262613c7e634409a590e5d50ad124ae"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Italic/8448-8703.pbf",
+      "bytes": 49772,
+      "sha256": "c5ac063bb324f783a20ad168587f5d3c6966df53114ca95ab7a3af3d61458a42"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Italic/9984-10239.pbf",
+      "bytes": 27,
+      "sha256": "63fd0d6f3a490031418a5d2c7756e8dfa583b3c68bf4bbac1a7e543fe63f906f"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Medium/0-255.pbf",
+      "bytes": 77628,
+      "sha256": "ba2f0118dd024e3041b158e5f9eb49bc0a658019f53f458e9f5c0b8efcd79b91"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Medium/1024-1279.pbf",
+      "bytes": 128608,
+      "sha256": "1fd3385560bae824ee48de8c920412ca3a75cabe5ada5ea67d8d188787018319"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Medium/1280-1535.pbf",
+      "bytes": 86131,
+      "sha256": "655ca6c720bba0bbfc5c6e916eac896a38f6c92346cead859dcbbc7a6ee7544e"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Medium/256-511.pbf",
+      "bytes": 129635,
+      "sha256": "d5e801a1a5b1d409d3298c3a1e1ca76328e2314a751078833a618620e8e66e4d"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Medium/512-767.pbf",
+      "bytes": 96169,
+      "sha256": "985e56060887a8e774fdf62ec4619f26bd44d264fcb837d315023f87d768f8e2"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Medium/65024-65279.pbf",
+      "bytes": 69691,
+      "sha256": "f24c9ca288019e1aabe98bd48a2c480adfa379e6ef8b70da0c7f076a94570136"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Medium/768-1023.pbf",
+      "bytes": 71160,
+      "sha256": "4b92939b4d3779b2d0b6be5b69c105e8c88352c047170e474011e82511ac03e9"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Medium/8192-8447.pbf",
+      "bytes": 65101,
+      "sha256": "cc38e4956207f0edba1aaf749b61e8f6f1678ef1ad443d32ee285b21d0eb67aa"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Medium/8448-8703.pbf",
+      "bytes": 77027,
+      "sha256": "9579816ed2c7765b605f76271f212b28fb82ba2019bef3156db270d3e9aa6790"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Medium/9984-10239.pbf",
+      "bytes": 22921,
+      "sha256": "1d0a65f3030934e74f6460af8a747033fcce02682a33371574a36e94afeb4740"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Regular/0-255.pbf",
+      "bytes": 76044,
+      "sha256": "62c6d49b15fa836eb6aa45e259c7ca6762f44b011b09e47776efbe4a6db1b397"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Regular/1024-1279.pbf",
+      "bytes": 125320,
+      "sha256": "302231023f7048d9694a7b3f3b737c8bc378f5af0175aed5bb4f2f3b6188919a"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Regular/1280-1535.pbf",
+      "bytes": 84434,
+      "sha256": "34345ffc1a3c6748147e079a7971a4ef10561f721fdf76a4a91491280ab8bccb"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Regular/256-511.pbf",
+      "bytes": 127726,
+      "sha256": "2eca7561f9f566bcacfda5dd04fb5880baec1328ec0f5484678289a13994de8a"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Regular/512-767.pbf",
+      "bytes": 94728,
+      "sha256": "6abc80badad0e823e228ab739515be257c8b33bc68bb077dd873030e9b2d143a"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Regular/65024-65279.pbf",
+      "bytes": 68701,
+      "sha256": "79839b70b48fa9c4cae32f946571481c167adc35eae404044d1ca74514f731b1"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Regular/768-1023.pbf",
+      "bytes": 77034,
+      "sha256": "537ccbee79180f4f8b3f6d2bdd27df979260ce1a0358c40d7aa7db505d9b03aa"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Regular/8192-8447.pbf",
+      "bytes": 64220,
+      "sha256": "8ea977a587352fe31b4159ffdbc9a40be79056f2472017c742ea1e4a931864b9"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Regular/8448-8703.pbf",
+      "bytes": 82014,
+      "sha256": "125b49cccfe95ac2f64b6bc2661871fba0081ff1b24f34c20bd29260b9351b57"
+    },
+    {
+      "url": "/map-assets/fonts/Noto%20Sans%20Regular/9984-10239.pbf",
+      "bytes": 101495,
+      "sha256": "bdb6b5deb10499a1778b4d1192bc16d59cd7fc8880ca0445b54c1747058883dc"
+    },
+    {
+      "url": "/map-assets/licenses/basemaps-assets-README.md",
+      "bytes": 1420,
+      "sha256": "0642fa83cf4315e564439a3fc461ef21303d54ce1f981cbae71a90bd46cc1ce0"
+    },
+    {
+      "url": "/map-assets/licenses/icons-MIT.txt",
+      "bytes": 1074,
+      "sha256": "46d0ca73c10d7366ef7bf3932d8508267096393ccc9ef3a41d1b1d1fe37023f1"
+    },
+    {
+      "url": "/map-assets/licenses/Noto-OFL.txt",
+      "bytes": 4374,
+      "sha256": "7713cfc8e3c36d5ec4aa3d6cffe7500a1b3310f8a86d914b8ea09c2a9dee7c2d"
+    },
+    {
+      "url": "/map-assets/places.json",
+      "bytes": 612966,
+      "sha256": "7251690164c25eaf5ce8aa3380570fa9c3114ac281bce0080abab5ab3fc53834"
+    },
+    {
+      "url": "/map-assets/sprites/dark.json",
+      "bytes": 3549,
+      "sha256": "bfac76cf7ed5c2aa2992695904056a1c6b07785b7fd20e6c640cb44fd6244a2e"
+    },
+    {
+      "url": "/map-assets/sprites/dark.png",
+      "bytes": 16054,
+      "sha256": "8920f68e8f9f7a4188da43e62a81bbc426532579fff7b5f27aad09e130f4246e"
+    },
+    {
+      "url": "/map-assets/sprites/dark@2x.json",
+      "bytes": 3579,
+      "sha256": "1fb5b123fbe35d2e1f6ac171513ce01df89e671273a417ee89c44886a4c132f0"
+    },
+    {
+      "url": "/map-assets/sprites/dark@2x.png",
+      "bytes": 28407,
+      "sha256": "6e01b4e366d304f27bbd55390511a3d4e39aa1d03eb3e82f873f7ea32e74cbe4"
+    },
+    {
+      "url": "/map-assets/sprites/light.json",
+      "bytes": 3549,
+      "sha256": "bfac76cf7ed5c2aa2992695904056a1c6b07785b7fd20e6c640cb44fd6244a2e"
+    },
+    {
+      "url": "/map-assets/sprites/light.png",
+      "bytes": 16174,
+      "sha256": "b6a34640917bdc57d0bd080836db33376371a3312ebe7b849045268015de3481"
+    },
+    {
+      "url": "/map-assets/sprites/light@2x.json",
+      "bytes": 3579,
+      "sha256": "1fb5b123fbe35d2e1f6ac171513ce01df89e671273a417ee89c44886a4c132f0"
+    },
+    {
+      "url": "/map-assets/sprites/light@2x.png",
+      "bytes": 28852,
+      "sha256": "23f6e9df27c2e9a14385763980a24e3608966bfc8192a106058bc2ca959ab563"
+    }
+  ],
+  "totalBytes": 12865003,
+  "placeCount": 5673,
+  "buildingFeaturesAtZ15": 80244,
+  "buildingFeaturesWithHeightAtZ15": 31217
+}

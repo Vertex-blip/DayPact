@@ -1,0 +1,6 @@
+FIREBASE_PROJECT_ID=""
+FIREBASE_WEB_API_KEY=""
+APP_ORIGIN="http://127.0.0.1:5173"
+# Only the server may hold this FCM sender service-account credential.
+FIREBASE_CLIENT_EMAIL=""
+FIREBASE_PRIVATE_KEY=""

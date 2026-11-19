@@ -1,0 +1,11 @@
+* text=auto eol=lf
+*.png binary
+*.webp binary
+*.pmtiles binary
+*.pbf binary
+*.ttf binary
+# Preserve upstream license text verbatim, including its original whitespace.
+/public/fonts/Roboto-OFL.txt -whitespace
+/public/map-assets/licenses/Noto-OFL.txt -whitespace
+/public/map-assets/licenses/basemaps-assets-README.md -whitespace
+/public/map-assets/licenses/icons-MIT.txt -whitespace

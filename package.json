@@ -1,0 +1,55 @@
+{
+  "name": "daypact",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.12.0"
+  },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "dev:api": "wrangler dev --ip 127.0.0.1 --port 8787",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "npm run typecheck && npm test && npm run build",
+    "db:migrate:local": "wrangler d1 migrations apply daypact --local",
+    "db:migrate:remote": "wrangler d1 migrations apply daypact --remote",
+    "verify:maps": "node scripts/maps/verify.mjs",
+    "preflight": "node scripts/preflight.mjs",
+    "deploy": "npm run preflight && npm run check && npm run verify:maps && wrangler deploy",
+    "preview": "wrangler dev --ip 127.0.0.1 --port 8787"
+  },
+  "dependencies": {
+    "@protomaps/basemaps": "5.7.2",
+    "firebase": "13.4.0",
+    "hono": "4.13.19",
+    "jose": "6.2.18",
+    "lucide-react": "1.76.0",
+    "maplibre-gl": "6.19.0",
+    "pmtiles": "4.5.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261119.1",
+    "@playwright/test": "1.65.1",
+    "@types/node": "26.6.6",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.3.0",
+    "fake-indexeddb": "6.2.8",
+    "miniflare": "5.20261118.0-beta",
+    "prettier": "3.10.1",
+    "sharp": "0.35.5",
+    "typescript": "7.0.2",
+    "vite": "8.3.8",
+    "vitest": "5.1.1",
+    "wrangler": "4.165.0"
+  },
+  "overrides": {
+    "@grpc/grpc-js": "1.14.7"
+  }
+}
