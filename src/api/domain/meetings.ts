@@ -1,14 +1,11 @@
 import type { MeetingPlaceOption, MeetingPlaces, Place, Plan } from '../../shared/contracts';
 import { HttpError } from '../types';
+import { addDays, localParts, occurs } from './dates';
 import { memberPlan, ownerPlan, rowInput, serializePlan, sha256, type PlanRow } from './repository';
 
 export function requireMeeting(plan: Pick<PlanRow, 'kind' | 'cadence'>): void {
-  if (plan.kind !== 'event' || plan.cadence !== 'once')
-    throw new HttpError(
-      400,
-      'MEETING_REQUIRED',
-      'Place proposals are available for one-time meetings',
-    );
+  if (plan.kind !== 'event')
+    throw new HttpError(400, 'MEETING_REQUIRED', 'Coordination is available for meetings');
 }
 
 export function samePlace(serialized: string | null, place: Place | null | undefined): boolean {
@@ -21,28 +18,53 @@ export function samePlace(serialized: string | null, place: Place | null | undef
         previous.label === place.label;
 }
 
-/** One statement reads both membership and each meeting's own occurrence progress. */
+export function nextMeetingDate(
+  plan: Pick<PlanRow, 'start_date' | 'cadence'>,
+  from: string,
+): string | null {
+  let date = from > plan.start_date ? from : plan.start_date;
+  if (plan.cadence === 'once') return date === plan.start_date ? date : null;
+  for (let n = 0; n < 32; n++, date = addDays(date, 1))
+    if (occurs(plan.start_date, plan.cadence, date)) return date;
+  return null;
+}
+/** At most 200 member plans are evaluated; one bounded query reads the nearest 50 occurrences. */
 export async function upcomingMeetings(db: D1Database, uid: string, from: string): Promise<Plan[]> {
+  const candidates = await db
+    .prepare(
+      "SELECT p.* FROM plans p JOIN plan_members m ON m.plan_id=p.id WHERE m.user_id=? AND p.kind='event' LIMIT 200",
+    )
+    .bind(uid)
+    .all<PlanRow>();
+  const upcoming = candidates.results
+    .map((p) => ({ id: p.id, date: nextMeetingDate(p, from), time: p.time, version: p.version }))
+    .filter((p): p is typeof p & { date: string } => p.date !== null)
+    .sort(
+      (a, b) =>
+        a.date.localeCompare(b.date) || a.time.localeCompare(b.time) || a.id.localeCompare(b.id),
+    )
+    .slice(0, 50);
+  if (!upcoming.length) return [];
   const rows = await db
     .prepare(
       `
     WITH upcoming AS (
-      SELECT p.* FROM plans p JOIN plan_members viewer ON viewer.plan_id=p.id
-      WHERE viewer.user_id=? AND p.kind='event' AND p.cadence='once' AND p.start_date>=?
-      ORDER BY p.start_date,p.time,p.id LIMIT 50
+      SELECT p.*,json_extract(j.value,'$.date') AS occurrence_date FROM plans p JOIN plan_members viewer ON viewer.plan_id=p.id JOIN json_each(?) j ON json_extract(j.value,'$.id')=p.id
+      WHERE viewer.user_id=? AND p.kind='event' AND p.version=json_extract(j.value,'$.version')
     )
     SELECT p.*,u.uid AS member_uid,u.display_name AS member_name,
       c.completed,c.contribution,c.updated_at AS progress_updated,r.status AS rsvp
     FROM upcoming p JOIN plan_members m ON m.plan_id=p.id JOIN users u ON u.uid=m.user_id
-    LEFT JOIN checkins c ON c.plan_id=p.id AND c.user_id=m.user_id AND c.occurrence_date=p.start_date
-    LEFT JOIN rsvps r ON r.plan_id=p.id AND r.user_id=m.user_id AND r.occurrence_date=p.start_date
-    ORDER BY p.start_date,p.time,p.id,CASE WHEN u.uid=p.owner_id THEN 0 ELSE 1 END,u.display_name,u.uid
+    LEFT JOIN checkins c ON c.plan_id=p.id AND c.user_id=m.user_id AND c.occurrence_date=p.occurrence_date
+    LEFT JOIN rsvps r ON r.plan_id=p.id AND r.user_id=m.user_id AND r.occurrence_date=p.occurrence_date
+    ORDER BY p.occurrence_date,p.time,p.id,CASE WHEN u.uid=p.owner_id THEN 0 ELSE 1 END,u.display_name,u.uid
   `,
     )
-    .bind(uid, from)
+    .bind(JSON.stringify(upcoming), uid)
     .all<
       PlanRow & {
         member_uid: string;
+        occurrence_date: string;
         member_name: string;
         completed: number | null;
         contribution: number | null;
@@ -59,7 +81,7 @@ export async function upcomingMeetings(db: D1Database, uid: string, from: string
         id: row.id,
         ownerId: row.owner_id,
         version: row.version,
-        date: row.start_date,
+        date: row.occurrence_date,
         members: [],
         createdAt: row.created_at,
         updatedAt: row.updated_at,
@@ -163,7 +185,7 @@ export async function proposeMeetingPlace(
     db
       .prepare(
         `INSERT INTO meeting_place_operations(user_id,operation_id,plan_id,fingerprint,created_at)
-      SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM plans p JOIN plan_members m ON m.plan_id=p.id WHERE p.id=? AND m.user_id=? AND p.kind='event' AND p.cadence='once')
+      SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM plans p JOIN plan_members m ON m.plan_id=p.id WHERE p.id=? AND m.user_id=? AND p.kind='event')
       ON CONFLICT(user_id,operation_id) DO NOTHING`,
       )
       .bind(uid, input.operationId, id, fingerprint, stamp, id, uid),
@@ -172,7 +194,7 @@ export async function proposeMeetingPlace(
         `
     INSERT INTO meeting_places(id,plan_id,proposed_by,place_json,created_at)
     SELECT ?,p.id,?,?,? FROM plans p JOIN plan_members m ON m.plan_id=p.id AND m.user_id=?
-    WHERE p.id=? AND p.kind='event' AND p.cadence='once' AND changes()=1
+    WHERE p.id=? AND p.kind='event' AND changes()=1
       AND EXISTS(SELECT 1 FROM meeting_place_operations WHERE user_id=? AND operation_id=? AND fingerprint=?)
     ON CONFLICT(id) DO NOTHING
   `,
@@ -220,7 +242,7 @@ export async function voteMeetingPlace(
     await db
       .prepare(
         `DELETE FROM meeting_place_votes WHERE plan_id=? AND user_id=?
-      AND EXISTS(SELECT 1 FROM plans p JOIN plan_members m ON m.plan_id=p.id WHERE p.id=? AND m.user_id=? AND p.kind='event' AND p.cadence='once')`,
+      AND EXISTS(SELECT 1 FROM plans p JOIN plan_members m ON m.plan_id=p.id WHERE p.id=? AND m.user_id=? AND p.kind='event')`,
       )
       .bind(id, uid, id, uid)
       .run();
@@ -232,7 +254,7 @@ export async function voteMeetingPlace(
     INSERT INTO meeting_place_votes(plan_id,user_id,option_id,updated_at)
     SELECT p.id,?,?,? FROM plans p JOIN plan_members m ON m.plan_id=p.id AND m.user_id=?
     JOIN meeting_places o ON o.plan_id=p.id AND o.id=?
-    WHERE p.id=? AND p.kind='event' AND p.cadence='once'
+    WHERE p.id=? AND p.kind='event'
     ON CONFLICT(plan_id,user_id) DO UPDATE SET option_id=excluded.option_id,updated_at=excluded.updated_at
   `,
     )
@@ -261,12 +283,13 @@ export async function confirmMeetingPlace(
   if (!option)
     throw new HttpError(404, 'PLACE_NOT_FOUND', 'Choose a current place in this meeting');
   const mutation = crypto.randomUUID();
+  const today = localParts(new Date(), old.time_zone).date;
   const changed = !samePlace(old.place_json, JSON.parse(option.place_json));
   const results = await db.batch([
     db
       .prepare(
         `UPDATE plans SET place_json=(SELECT place_json FROM meeting_places WHERE plan_id=? AND id=?),version=version+1,mutation_id=?,updated_at=?
-      WHERE id=? AND owner_id=? AND version=? AND kind='event' AND cadence='once'
+      WHERE id=? AND owner_id=? AND version=? AND kind='event'
       AND EXISTS(SELECT 1 FROM meeting_places WHERE plan_id=? AND id=?)`,
       )
       .bind(
@@ -282,9 +305,9 @@ export async function confirmMeetingPlace(
       ),
     db
       .prepare(
-        'DELETE FROM rsvps WHERE plan_id=? AND ?=1 AND EXISTS(SELECT 1 FROM plans WHERE id=? AND mutation_id=?)',
+        'DELETE FROM rsvps WHERE plan_id=? AND occurrence_date>=? AND ?=1 AND EXISTS(SELECT 1 FROM plans WHERE id=? AND mutation_id=?)',
       )
-      .bind(id, changed ? 1 : 0, id, mutation),
+      .bind(id, today, changed ? 1 : 0, id, mutation),
   ]);
   if (!results[0].meta.changes) {
     const current = await ownerPlan(db, id, uid);
@@ -293,5 +316,5 @@ export async function confirmMeetingPlace(
     throw new HttpError(404, 'PLACE_NOT_FOUND', 'The proposed place is no longer available');
   }
   const current = await memberPlan(db, id, uid);
-  return serializePlan(db, current, current.start_date);
+  return serializePlan(db, current, nextMeetingDate(current, today) ?? current.start_date);
 }

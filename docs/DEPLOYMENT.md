@@ -68,6 +68,7 @@ Do these against the real production origin using separate test accounts, then d
 - Register two accounts, receive/complete email verification, sign in, recover a password, and confirm revoked sessions lose API access.
 - Invite/accept a friend, create a shared recurring plan with a location, update each person's own completion and verify the other account sees the change. A third uninvited account must not read or mutate it.
 - Create a named future meeting with several friends, propose and vote for places, confirm as the organizer and submit individual attendance. Verify that changed details require new responses, stale versions fail and removed members lose access to proposals/votes.
+- Exercise recurring occurrences separately: time availability, threshold confirmation, own travel status, competing supply claims, exact expense splitting and payment-version resets. Keep fixture notifications disabled unless explicitly testing delivery on a device.
 - Download Astana, install/open offline, search a place, save an offline change, reconnect and verify a single synchronized result. Log out/switch accounts; private snapshots and notifications must not leak.
 - Enable push on actual Android and installed iPhone PWA devices. Test one scheduled reminder and one friend nudge, quiet hours, disabling notifications, expired tokens and logout. Check real Cloudflare CPU/subrequest metrics; local tests cannot establish the free-plan CPU budget.
 - Export data across multiple pages and delete an account after recent sign-in. Confirm D1 data is removed and Firebase deletion is complete or visibly pending for retry.
@@ -88,7 +89,7 @@ Use D1 Time Travel/exports for recovery, retaining backups securely and testing 
 ## Configured resources
 
 - App origin: `https://daypact.vertex-blip.workers.dev`.
-- Cloudflare D1: `daypact`, ID `222fd9fe-f67c-41ae-82c6-52d84f92c45e`, migrations `0001_initial.sql` and `0002_meetings.sql` applied in EEUR.
+- Cloudflare D1: `daypact`, ID `222fd9fe-f67c-41ae-82c6-52d84f92c45e`, migrations `0001_initial.sql`, `0002_meetings.sql` and `0003_coordination.sql` applied in EEUR.
 - Firebase project: `daypact-8dd4b`, project number `621011622605`, Spark.
 - Web app: `1:621011622605:web:4f309d5e7cddc1ed53a784`.
 - Password policy: enforce 12–128 characters; email enumeration protection enabled; production hostname authorized.

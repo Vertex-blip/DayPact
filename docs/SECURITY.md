@@ -19,9 +19,12 @@ The Firebase web API key/public configuration are client configuration, not admi
 - Removing a friendship revokes reciprocal membership in plans owned by those two users. A third owner's shared plan is a separate relationship.
 - Plan updates combine a version check and transaction-scoped mutation marker. Losing concurrent updates cannot alter members. Check-in IDs bind to payload fingerprints and cannot replay over newer progress.
 - Offline plan creation uses actor-scoped UUID receipts and an atomic receipt/plan/member transaction. Different payloads cannot reuse a key. Receipts survive plan deletion, preventing delayed retries from recreating removed plans or re-adding revoked members.
-- One-time meeting proposals and votes require current membership. Upcoming lists and proposal reads include the viewer's membership in the same SQL statement as private rows. A vote belongs to its authenticated actor and cannot target an option in another meeting.
+- Meeting proposals and votes require current membership. Upcoming lists and proposal reads include the viewer's membership in the same SQL statement as private rows. A vote belongs to its authenticated actor and cannot target an option in another meeting.
 - Proposal receipts bind the actor, meeting and place to one operation ID. Receipts survive proposal removal, so a delayed replay cannot restore a removed proposal after re-invitation. Membership foreign keys cascade proposals and votes; database triggers enforce three proposals per member and 24 per meeting even during concurrent requests.
 - Only the organizer can adopt a proposed place, using a version-checked update. RSVP writes also check the current version and membership atomically. Missing versions from older clients are rejected with a refresh conflict. A successful change to event details clears applicable responses; losing concurrent edits cannot clear them. Neither the organizer nor another member can submit attendance for someone else.
+- Time options are organizer-controlled and series-wide; members can select only their own availability among that meeting's current options. Schedule confirmation is version-checked and resets applicable attendance. Travel, supplies, expenses and paid marks are occurrence-scoped; ordinary writes use a bounded calendar window.
+- Travel updates require today's occurrence and the actor's accepted RSVP. Supply claims are atomic and cannot take over another participant's claim. Item creation receipts prevent a delayed retry from recreating a deleted item. Historical deletion retains creator/organizer authorization and item versions.
+- Expense totals are organizer-only; accepted participants can change only their own paid mark using the current expense version. Changes to the total or accepted roster invalidate paid marks. The split assigns integer remainders deterministically and never holds/transfers money. Clearing an old budget retains its version history to prevent stale writes from matching a recreated version.
 - Invitation tokens have 256 bits of cryptographic randomness, are stored hashed, expire after seven days and are consumed atomically. Friends see limited public profiles; exports exclude other users' private profiles, emails and push tokens.
 
 Revocation controls subsequent authorized access; it cannot erase information a member already saw, copied or cached. Progress and savings are self-reported, not financial transactions or proof of physical attendance.
@@ -54,6 +57,8 @@ A two-minute delivery lease prevents overlapping workers from normally sending t
 
 Browser SDK push-subscription cleanup has a five-second deadline and is best effort, so that cleanup cannot indefinitely block sign-out or completed account deletion. Sign-out starts private-storage cleanup and clears the active push recipient before subscription cleanup, then awaits the private-storage cleanup before finishing. This deadline does not guarantee provider-side token deletion while offline or during an outage.
 
+Meeting threshold alerts use durable once-per-occurrence receipts; travel alerts are limited to one per actor/status/occurrence. Receipt creation and recipient insertion share a transaction and mutation marker. Current membership, persisted travel state, accepted attendance and preferences are checked before enqueue. Quiet/muted events consume the receipt and are not replayed later. Generic text avoids disclosing details or asserting that a previously reached threshold still holds when a delayed push arrives.
+
 Delivery is best effort and at least once, not exactly once or guaranteed at an exact minute. Crashes and partial multi-device success can repeat sends; stable browser tags reduce visible duplicates. A preference change after a claim cannot retract an already in-flight send. Push requires connectivity and permission; offline plans do not provide offline push delivery.
 
 ## Work bounds and operational limits
@@ -64,7 +69,7 @@ Live Cloudflare CPU profiling has **not** been completed. A subrequest count doe
 
 Exports paginate check-ins instead of silently cutting off history. Clients follow `nextCursor` to completion or show a memory-limit failure. Pages are live reads, not a frozen snapshot.
 
-Upcoming meetings are limited to the nearest 50 one-time events, with member progress read in one bounded query. Exported meeting places, votes and current one-time-event responses are scoped to the exporting user and bounded by active-plan/proposal limits; they do not disclose other members' contributions.
+Upcoming meetings are limited to the nearest 50 next occurrences from the user's bounded plan set. Coordination reads are membership-bound and batched. A time poll has at most six options; a series has at most 300 supplies (30 per occurrence) and 366 nonzero budgets. Owners/creators can clear authorized historical records to regain active capacity. Zero budget headers and operation/notification receipts retain safety history; storage still needs monitoring and an operational retention policy.
 
 ## Deletion and recovery
 

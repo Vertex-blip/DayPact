@@ -38,7 +38,7 @@ import {
   type UserRow,
   type PlanRow,
 } from './domain/repository';
-import { occurs, localParts, nextReminder, isQuiet } from './domain/dates';
+import { occurs, localParts, nextReminder, isQuiet, addDays } from './domain/dates';
 import {
   upcomingMeetings,
   meetingPlaces,
@@ -46,7 +46,30 @@ import {
   voteMeetingPlace,
   confirmMeetingPlace,
   samePlace,
+  nextMeetingDate,
 } from './domain/meetings';
+import {
+  coordination,
+  timeOptionsSchema,
+  timeVotesSchema,
+  travelSchema,
+  itemCreateSchema,
+  itemEditSchema,
+  itemClaimSchema,
+  itemDeleteSchema,
+  expenseSchema,
+  paidSchema,
+  replaceTimeOptions,
+  voteTimes,
+  confirmTime,
+  updateTravel,
+  createItem,
+  mutateItem,
+  updateExpense,
+  updatePaid,
+} from './domain/coordination';
+import { queueMeetingThreshold, queueMeetingTravel } from './domain/meeting-notifications';
+import { coordinationExport } from './domain/coordinationExport';
 
 type Bindings = { Bindings: Env; Variables: { identity: Identity; user: UserRow } };
 const ok = { ok: true } as const;
@@ -113,6 +136,8 @@ export function createApi(verify: Authenticator = defaultAuthenticate) {
       ['push_tokens.token', 'TOKEN_CONFLICT', 409],
       ['PLACE_LIMIT', 'PLACE_LIMIT', 409],
       ['MEETING_REQUIRED', 'MEETING_REQUIRED', 400],
+      ['COORDINATION_LIMIT', 'COORDINATION_LIMIT', 409],
+      ['meeting_times.', 'OPERATION_CONFLICT', 409],
     ] as const) {
       if (message.includes(needle))
         return errorResponse(status, code, 'The request could not be completed', requestId);
@@ -258,6 +283,112 @@ export function createApi(verify: Authenticator = defaultAuthenticate) {
     );
     return c.json({ plan });
   });
+  app.get('/plans/:id/coordination', async (c) =>
+    c.json(
+      await coordination(
+        c.env.DB,
+        idSchema.parse(c.req.param('id')),
+        ownsIdentity(c),
+        dateSchema.parse(c.req.query('date')),
+      ),
+    ),
+  );
+  app.put('/plans/:id/time-options', async (c) => {
+    await replaceTimeOptions(
+      c.env.DB,
+      idSchema.parse(c.req.param('id')),
+      ownsIdentity(c),
+      timeOptionsSchema.parse(await c.req.json()),
+    );
+    return c.json(ok);
+  });
+  app.put('/plans/:id/time-vote', async (c) => {
+    await voteTimes(
+      c.env.DB,
+      idSchema.parse(c.req.param('id')),
+      ownsIdentity(c),
+      timeVotesSchema.parse(await c.req.json()),
+    );
+    return c.json(ok);
+  });
+  app.post('/plans/:id/time-confirm', async (c) =>
+    c.json({
+      plan: await confirmTime(
+        c.env.DB,
+        idSchema.parse(c.req.param('id')),
+        ownsIdentity(c),
+        meetingConfirmSchema.parse(await c.req.json()),
+      ),
+    }),
+  );
+  app.put('/plans/:id/travel', async (c) => {
+    const id = idSchema.parse(c.req.param('id')),
+      uid = ownsIdentity(c),
+      input = travelSchema.parse(await c.req.json());
+    await updateTravel(c.env.DB, id, uid, input);
+    await queueMeetingTravel(c.env.DB, id, input.date, uid, input.status);
+    return c.json(ok);
+  });
+  app.post('/plans/:id/items', async (c) => {
+    await createItem(
+      c.env.DB,
+      idSchema.parse(c.req.param('id')),
+      ownsIdentity(c),
+      itemCreateSchema.parse(await c.req.json()),
+    );
+    return c.json(ok);
+  });
+  app.patch('/plans/:id/items/:itemId', async (c) => {
+    await mutateItem(
+      c.env.DB,
+      idSchema.parse(c.req.param('id')),
+      idSchema.parse(c.req.param('itemId')),
+      ownsIdentity(c),
+      itemEditSchema.parse(await c.req.json()),
+      'edit',
+    );
+    return c.json(ok);
+  });
+  app.delete('/plans/:id/items/:itemId', async (c) => {
+    await mutateItem(
+      c.env.DB,
+      idSchema.parse(c.req.param('id')),
+      idSchema.parse(c.req.param('itemId')),
+      ownsIdentity(c),
+      itemDeleteSchema.parse(await c.req.json()),
+      'delete',
+    );
+    return c.json(ok);
+  });
+  app.put('/plans/:id/items/:itemId/claim', async (c) => {
+    await mutateItem(
+      c.env.DB,
+      idSchema.parse(c.req.param('id')),
+      idSchema.parse(c.req.param('itemId')),
+      ownsIdentity(c),
+      itemClaimSchema.parse(await c.req.json()),
+      'claim',
+    );
+    return c.json(ok);
+  });
+  app.put('/plans/:id/expense', async (c) => {
+    await updateExpense(
+      c.env.DB,
+      idSchema.parse(c.req.param('id')),
+      ownsIdentity(c),
+      expenseSchema.parse(await c.req.json()),
+    );
+    return c.json(ok);
+  });
+  app.put('/plans/:id/expense/paid', async (c) => {
+    await updatePaid(
+      c.env.DB,
+      idSchema.parse(c.req.param('id')),
+      ownsIdentity(c),
+      paidSchema.parse(await c.req.json()),
+    );
+    return c.json(ok);
+  });
   app.post('/plans', async (c) => {
     const input = planSchema.parse(await c.req.json()),
       uid = ownsIdentity(c),
@@ -282,6 +413,7 @@ export function createApi(verify: Authenticator = defaultAuthenticate) {
             place: input.place ?? null,
             targetAmount: input.kind === 'savings' ? input.targetAmount : null,
             remindMinutes: input.remindMinutes,
+            ...((input.minAttendees ?? 2) !== 2 ? { minAttendees: input.minAttendees } : {}),
           }),
         )
       : '';
@@ -325,7 +457,7 @@ export function createApi(verify: Authenticator = defaultAuthenticate) {
           ]
         : []),
       c.env.DB.prepare(
-        `INSERT INTO plans(id,owner_id,title,description,kind,cadence,start_date,time,time_zone,place_json,target_amount,remind_minutes,mutation_id,next_reminder_at,next_reminder_date,created_at,updated_at) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE ? IS NULL OR EXISTS(SELECT 1 FROM plan_create_operations WHERE user_id=? AND operation_id=? AND plan_id=?)`,
+        `INSERT INTO plans(id,owner_id,title,description,kind,cadence,start_date,time,time_zone,place_json,target_amount,remind_minutes,min_attendees,mutation_id,next_reminder_at,next_reminder_date,created_at,updated_at) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE ? IS NULL OR EXISTS(SELECT 1 FROM plan_create_operations WHERE user_id=? AND operation_id=? AND plan_id=?)`,
       ).bind(
         id,
         uid,
@@ -339,6 +471,7 @@ export function createApi(verify: Authenticator = defaultAuthenticate) {
         input.place ? JSON.stringify(input.place) : null,
         input.kind === 'savings' ? (input.targetAmount ?? null) : null,
         input.remindMinutes,
+        input.minAttendees ?? 2,
         crypto.randomUUID(),
         due?.at ?? null,
         due?.date ?? null,
@@ -407,7 +540,7 @@ export function createApi(verify: Authenticator = defaultAuthenticate) {
     const resetFrom = [localParts(now, old.time_zone).date, localParts(now, zone).date].sort()[0];
     const results = await c.env.DB.batch([
       c.env.DB.prepare(
-        `UPDATE plans SET title=?,description=?,kind=?,cadence=?,start_date=?,time=?,time_zone=?,place_json=?,target_amount=?,remind_minutes=?,version=version+1,mutation_id=?,next_reminder_at=?,next_reminder_date=?,updated_at=? WHERE id=? AND owner_id=? AND version=?`,
+        `UPDATE plans SET title=?,description=?,kind=?,cadence=?,start_date=?,time=?,time_zone=?,place_json=?,target_amount=?,remind_minutes=?,min_attendees=?,version=version+1,mutation_id=?,next_reminder_at=?,next_reminder_date=?,updated_at=? WHERE id=? AND owner_id=? AND version=?`,
       ).bind(
         input.title,
         input.description ?? '',
@@ -419,6 +552,7 @@ export function createApi(verify: Authenticator = defaultAuthenticate) {
         input.place ? JSON.stringify(input.place) : null,
         input.kind === 'savings' ? (input.targetAmount ?? null) : null,
         input.remindMinutes,
+        input.minAttendees ?? 2,
         mutation,
         due?.at ?? null,
         due?.date ?? null,
@@ -439,8 +573,16 @@ export function createApi(verify: Authenticator = defaultAuthenticate) {
     ]);
     if (!results[0].meta.changes)
       throw new HttpError(409, 'VERSION_CONFLICT', 'The plan has changed; refresh it');
+    const updated = await memberPlan(c.env.DB, id, uid),
+      occurrence = nextMeetingDate(updated, localParts(now, zone).date);
+    if (updated.kind === 'event' && occurrence && old.min_attendees !== updated.min_attendees)
+      await queueMeetingThreshold(c.env.DB, id, occurrence);
     return c.json({
-      plan: await serializePlan(c.env.DB, await memberPlan(c.env.DB, id, uid), input.startDate),
+      plan: await serializePlan(
+        c.env.DB,
+        updated,
+        updated.kind === 'event' ? (occurrence ?? input.startDate) : input.startDate,
+      ),
     });
   });
   app.delete('/plans/:id', async (c) => {
@@ -514,6 +656,9 @@ export function createApi(verify: Authenticator = defaultAuthenticate) {
       throw new HttpError(400, 'MEETING_REQUIRED', 'Only events accept attendance responses');
     if (plan.version !== input.version)
       throw new HttpError(409, 'VERSION_CONFLICT', 'The meeting has changed; refresh it');
+    const rsvpToday = localParts(new Date(), plan.time_zone).date;
+    if (input.date < addDays(rsvpToday, -1) || input.date > addDays(rsvpToday, 366))
+      throw new HttpError(400, 'OCCURRENCE_WINDOW', 'Choose a current or upcoming occurrence');
     const result = await c.env.DB.prepare(
       `INSERT INTO rsvps(plan_id,user_id,occurrence_date,status,updated_at)
       SELECT p.id,?,?,?,? FROM plans p JOIN plan_members m ON m.plan_id=p.id AND m.user_id=?
@@ -526,6 +671,7 @@ export function createApi(verify: Authenticator = defaultAuthenticate) {
       await memberPlan(c.env.DB, id, uid);
       throw new HttpError(409, 'VERSION_CONFLICT', 'The meeting has changed; refresh it');
     }
+    await queueMeetingThreshold(c.env.DB, id, input.date);
     return c.json(ok);
   });
   app.post('/plans/:id/nudges', async (c) => {
@@ -656,6 +802,9 @@ export function createApi(verify: Authenticator = defaultAuthenticate) {
       .run();
     return c.json(ok);
   });
+  app.get('/export/coordination', async (c) =>
+    c.json(await coordinationExport(c.env.DB, ownsIdentity(c), c.req.query())),
+  );
   app.get('/export', async (c) => {
     const uid = ownsIdentity(c),
       query = z
@@ -704,7 +853,7 @@ export function createApi(verify: Authenticator = defaultAuthenticate) {
     if (!cursor) {
       const [plans, friends, meetingPlaces, meetingVotes, meetingResponses] = await c.env.DB.batch([
         c.env.DB.prepare(
-          `SELECT p.id,p.owner_id,p.title,p.description,p.kind,p.cadence,p.start_date,p.time,p.time_zone,p.place_json,p.target_amount,p.remind_minutes,p.created_at,p.updated_at FROM plans p JOIN plan_members m ON m.plan_id=p.id WHERE m.user_id=? LIMIT 200`,
+          `SELECT p.id,p.owner_id,p.title,p.description,p.kind,p.cadence,p.start_date,p.time,p.time_zone,p.place_json,p.target_amount,p.remind_minutes,p.min_attendees,p.created_at,p.updated_at FROM plans p JOIN plan_members m ON m.plan_id=p.id WHERE m.user_id=? LIMIT 200`,
         ).bind(uid),
         c.env.DB.prepare(
           'SELECT CASE WHEN user_low=? THEN user_high ELSE user_low END AS uid,created_at FROM friendships WHERE user_low=? OR user_high=? LIMIT 200',

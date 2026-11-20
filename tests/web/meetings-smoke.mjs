@@ -174,11 +174,75 @@ try {
     { uid: 'carol', displayName: 'Нұржан', username: 'nurzhan', city: 'Астана' },
   ];
   const future = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
+  const today = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Almaty',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
   const plans = [],
     proposals = [],
     proposalAttempts = [],
     rsvpRequests = [];
   let failFirstProposal = true;
+  let failFirstItem = true;
+  const timeOptions = [],
+    travel = [],
+    items = [],
+    itemAttempts = [],
+    coordinateRequests = [];
+  const occurrenceMembers = new Map(),
+    budgets = new Map();
+  const planFor = (date) => {
+    const plan = plans[0];
+    if (
+      !plan ||
+      date < plan.startDate ||
+      (plan.cadence === 'once'
+        ? date !== plan.startDate
+        : ((Date.parse(date) - Date.parse(plan.startDate)) / 86400000) % 7 !== 0)
+    )
+      return null;
+    if (date === plan.date) return plan;
+    if (!occurrenceMembers.has(date))
+      occurrenceMembers.set(
+        date,
+        plan.members.map((member) => ({ ...member, completed: false, rsvp: 'pending' })),
+      );
+    return { ...plan, date, members: occurrenceMembers.get(date) };
+  };
+  const coordination = (date) => {
+    const plan = planFor(date) ?? plans[0],
+      accepted = plan.members
+        .filter((member) => member.rsvp === 'accepted')
+        .sort((a, b) => a.uid.localeCompare(b.uid));
+    if (!budgets.has(date)) budgets.set(date, { version: 0, total: 0, shares: [], roster: '' });
+    const expense = budgets.get(date),
+      roster = accepted.map((member) => member.uid).join(',');
+    if (expense.roster !== roster) {
+      expense.version++;
+      expense.roster = roster;
+      expense.shares = accepted.map((member, index) => ({
+        uid: member.uid,
+        displayName: member.displayName,
+        amount:
+          Math.floor(expense.total / accepted.length) +
+          (index < expense.total % accepted.length ? 1 : 0),
+        paid: false,
+      }));
+    }
+    return {
+      planVersion: plan.version,
+      date,
+      minAttendees: plan.minAttendees,
+      acceptedCount: accepted.length,
+      confirmed: accepted.length >= plan.minAttendees,
+      timeOptions: { scope: 'series', options: timeOptions },
+      travel: travel.filter((value) => value.date === date),
+      items: items.filter((value) => value.date === date),
+      expense,
+    };
+  };
   const places = () => ({ planVersion: plans[0]?.version ?? 1, options: proposals });
   await context.route('https://identitytoolkit.googleapis.com/**', (route) =>
     route.fulfill({
@@ -205,6 +269,14 @@ try {
     let result,
       status = 200;
     if (name === '/api/me') result = { profile };
+    else if (name === '/api/export') result = { profile, checkins: [], nextCursor: null };
+    else if (name === '/api/export/coordination')
+      result = url.searchParams.has('cursor')
+        ? { records: [{ kind: 'travel', key: 'second', data: { uid: 'alice' } }], nextCursor: null }
+        : {
+            records: [{ kind: 'item', key: 'first', data: { createdBy: 'alice' } }],
+            nextCursor: 'next-page',
+          };
     else if (name === '/api/friends') result = { friends };
     else if (name === '/api/meetings') result = { meetings: plans };
     else if (name === '/api/notifications') result = { notifications: [] };
@@ -212,10 +284,11 @@ try {
       Object.assign(settings, body);
       result = { settings };
     } else if (name === '/api/plans' && method === 'GET')
-      result = { plans: plans.filter((plan) => plan.date === url.searchParams.get('date')) };
+      result = { plans: [planFor(url.searchParams.get('date'))].filter(Boolean) };
     else if (name === '/api/plans' && method === 'POST') {
       expect(body.kind).toBe('event');
-      expect(body.cadence).toBe('once');
+      expect(body.cadence).toBe('weekly');
+      expect(body.minAttendees).toBe(2);
       expect(body.memberIds).toEqual(['bob', 'carol']);
       const plan = {
         ...body,
@@ -246,6 +319,84 @@ try {
         voterIds: ['bob'],
         createdAt: new Date().toISOString(),
       });
+    } else if (name.endsWith('/coordination')) result = coordination(url.searchParams.get('date'));
+    else if (name.endsWith('/time-options')) {
+      expect(body.version).toBe(plans[0].version);
+      expect(body.options).toHaveLength(2);
+      timeOptions.splice(
+        0,
+        timeOptions.length,
+        ...body.options.map((option) => ({ ...option, availableUserIds: [] })),
+      );
+      plans[0].version++;
+      result = { ok: true };
+    } else if (name.endsWith('/time-vote')) {
+      expect(body.version).toBe(plans[0].version);
+      timeOptions.forEach((option) => {
+        option.availableUserIds = option.availableUserIds.filter((uid) => uid !== 'alice');
+        if (body.optionIds.includes(option.id)) option.availableUserIds.push('alice');
+      });
+      result = { ok: true };
+    } else if (name.endsWith('/time-confirm')) {
+      expect(body.version).toBe(plans[0].version);
+      const option = timeOptions.find((option) => option.id === body.optionId);
+      plans[0].date = plans[0].startDate = option.date;
+      plans[0].time = option.time;
+      plans[0].version++;
+      plans[0].members.forEach((member) => (member.rsvp = 'pending'));
+      result = { plan: plans[0] };
+    } else if (name.endsWith('/travel')) {
+      coordinateRequests.push({ name, body });
+      expect(body.date).toBe(today);
+      expect(body.version).toBe(plans[0].version);
+      expect(planFor(body.date).members[0].rsvp).toBe('accepted');
+      const index = travel.findIndex((value) => value.uid === 'alice' && value.date === body.date);
+      if (index >= 0) travel.splice(index, 1);
+      travel.push({ ...body, uid: 'alice', updatedAt: new Date().toISOString() });
+      result = { ok: true };
+    } else if (name.endsWith('/items') && method === 'POST') {
+      itemAttempts.push(body.operationId);
+      expect(body.date).toBe(today);
+      expect(body.version).toBe(plans[0].version);
+      if (!items.some((item) => item.id === body.operationId))
+        items.push({
+          id: body.operationId,
+          title: body.title,
+          date: body.date,
+          createdBy: 'alice',
+          claimedBy: null,
+          version: 1,
+        });
+      if (failFirstItem) {
+        failFirstItem = false;
+        return route.abort('failed');
+      }
+      result = { ok: true };
+    } else if (name.endsWith('/claim')) {
+      const item = items.find((item) => name.includes(item.id));
+      expect(body.date).toBe(today);
+      expect(body.version).toBe(item.version);
+      item.claimedBy = body.claimed ? 'alice' : null;
+      item.version++;
+      result = { ok: true };
+    } else if (name.endsWith('/expense')) {
+      const expense = coordination(body.date).expense;
+      expect(body.version).toBe(expense.version);
+      expense.total = body.total;
+      expense.version++;
+      expense.roster = '!recalculate';
+      coordination(body.date);
+      result = { ok: true };
+    } else if (name.endsWith('/expense/paid')) {
+      coordinateRequests.push({ name, body });
+      const expense = coordination(body.date).expense;
+      if (body.version !== expense.version) {
+        status = 409;
+        result = { error: { code: 'VERSION_CONFLICT' } };
+      } else {
+        expense.shares.find((share) => share.uid === 'alice').paid = body.paid;
+        result = { ok: true };
+      }
     } else if (name.endsWith('/places') && method === 'GET') result = places();
     else if (name.endsWith('/places') && method === 'POST') {
       expect(Object.keys(body).sort()).toEqual(['operationId', 'place']);
@@ -281,7 +432,7 @@ try {
         status = 409;
         result = { error: { code: 'VERSION_CONFLICT' } };
       } else {
-        plans[0].members[0].rsvp = body.status;
+        planFor(body.date).members[0].rsvp = body.status;
         result = { ok: true };
       }
     } else if (name.endsWith('/checkins')) {
@@ -303,6 +454,8 @@ try {
   await page.getByLabel('Кездесу атауы', { exact: true }).fill('Футбол');
   await page.locator('input[name=date]').fill(future);
   await page.locator('input[name=time]').fill('19:30');
+  await page.locator('select[name=cadence]').selectOption('weekly');
+  await page.locator('input[name=minimum]').fill('2');
   await page.getByRole('checkbox', { name: /Айдос/ }).check();
   await page.getByRole('checkbox', { name: /Нұржан/ }).check();
   await page.locator('select[name=reminder]').selectOption('-1');
@@ -316,6 +469,8 @@ try {
   await expect(page.getByLabel('Кездесу атауы', { exact: true })).toHaveValue('Футбол');
   await expect(page.locator('input[name=date]')).toHaveValue(future);
   await expect(page.locator('input[name=time]')).toHaveValue('19:30');
+  await expect(page.locator('select[name=cadence]')).toHaveValue('weekly');
+  await expect(page.locator('input[name=minimum]')).toHaveValue('2');
   await expect(page.getByRole('checkbox', { name: /Айдос/ })).toBeChecked();
   await expect(page.getByRole('checkbox', { name: /Нұржан/ })).toBeChecked();
   passed('map_picker_preserves_meeting_title_time_and_multiple_friends');
@@ -335,6 +490,7 @@ try {
   );
   expect(rsvpRequests.at(-1).version).toBe(1);
   passed('future_meeting_visible_and_self_rsvp_versioned');
+  await page.getByRole('button', { name: 'Келісу', exact: true }).click();
   await page.evaluate(() => {
     window.__daypactHoldMapReady = true;
     delete window.__daypactReleaseMapReady;
@@ -392,6 +548,7 @@ try {
     .locator('.meeting-option')
     .filter({ has: page.getByRole('button', { name: 'Достар футбол алаңы', exact: true }) });
   await option.getByRole('button', { name: 'Осы орынды бекіту', exact: true }).click();
+  await page.getByRole('button', { name: 'Кездесу', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Келемін', exact: true })).toHaveAttribute(
     'aria-pressed',
     'false',
@@ -412,6 +569,123 @@ try {
   );
   expect(rsvpRequests.at(-1).version).toBe(3);
   passed('stale_attendance_response_refreshes_details_before_retry');
+  await expect(page.getByRole('button', { name: 'Жолдамын', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Келісу', exact: true }).click();
+  await page.getByRole('button', { name: 'Уақытты бірге таңдау', exact: true }).click();
+  const slotFields = page.locator('.meeting-time-draft');
+  await slotFields.nth(0).locator('input[type=date]').fill(today);
+  await slotFields.nth(0).locator('input[type=time]').fill('18:30');
+  await slotFields.nth(1).locator('input[type=date]').fill(today);
+  await slotFields.nth(1).locator('input[type=time]').fill('20:00');
+  await page.getByRole('button', { name: 'Дауыс беруді ашу', exact: true }).click();
+  await expect(page.locator('.meeting-time-option')).toHaveCount(2);
+  const timeCards = page.locator('.meeting-time-option');
+  await timeCards
+    .nth(0)
+    .getByRole('button', { name: /^Маған ыңғайлы/ })
+    .click();
+  await timeCards
+    .nth(1)
+    .getByRole('button', { name: /^Маған ыңғайлы/ })
+    .click();
+  await expect
+    .poll(() => timeOptions.filter((option) => option.availableUserIds.includes('alice')).length)
+    .toBe(2);
+  await timeCards.nth(0).getByRole('button', { name: 'Осы уақытты бекіту', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Келемін', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'false',
+  );
+  expect(plans[0].date).toBe(today);
+  expect(plans[0].time).toBe('18:30');
+  await page.getByRole('button', { name: 'Келемін', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Жолдамын', exact: true })).toBeEnabled();
+  plans[0].members[1].rsvp = 'accepted';
+  await page.getByRole('button', { name: 'Жаңарту', exact: true }).click();
+  await expect(page.locator('.meeting-threshold')).toContainText('Құрам жиналды');
+  await expect(page.locator('.meeting-threshold')).toContainText('2/2');
+  passed('recurring_time_poll_multi_availability_owner_confirm_and_minimum_threshold');
+  await page.getByRole('button', { name: 'Жолдамын', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Жолдамын', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await page.getByRole('button', { name: '10 мин кешігемін', exact: true }).click();
+  await expect(page.getByRole('button', { name: '10 мин кешігемін', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  expect(coordinateRequests.at(-1).body.lateMinutes).toBe(10);
+  await page.getByRole('button', { name: 'Мен келдім', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Мен келдім', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  expect(travel.at(-1).uid).toBe('alice');
+  expect(plans[0].members[0].completed).toBe(false);
+  passed('today_travel_states_only_for_self_and_separate_from_completion');
+  await page.getByRole('dialog').evaluate((el) => el.scrollTo(0, 0));
+  await page.screenshot({ path: path.join(output, 'overview-coordination-kk.png') });
+  await page.getByRole('button', { name: 'Дайындық', exact: true }).click();
+  await page.getByRole('button', { name: 'Зат қосу', exact: true }).click();
+  await page.getByLabel('Зат қосу', { exact: true }).fill('Доп пен су');
+  await page.getByRole('button', { name: 'Қосу', exact: true }).click();
+  await expect(page.getByRole('alert')).toBeVisible();
+  await page.getByRole('button', { name: 'Қосу', exact: true }).click();
+  await expect(page.locator('.meeting-supply-row')).toHaveCount(1);
+  expect(itemAttempts).toHaveLength(2);
+  expect(itemAttempts[0]).toBe(itemAttempts[1]);
+  await page.getByRole('button', { name: 'Мен әкелемін', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Босату', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  expect(items[0].claimedBy).toBe('alice');
+  passed('supplies_claim_is_self_owned_and_retry_keeps_same_operation_id');
+  await page.getByRole('button', { name: 'Жалпы соманы енгізу', exact: true }).click();
+  await page.getByLabel('Жалпы сома, ₸', { exact: true }).fill('10001');
+  await page.getByRole('dialog').getByRole('button', { name: 'Сақтау', exact: true }).click();
+  await expect(page.locator('.meeting-share')).toHaveCount(2);
+  expect(coordination(today).expense.shares.map((share) => share.amount)).toEqual([5001, 5000]);
+  await page.getByRole('button', { name: 'Төледім', exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: 'Төлем белгісін алып тастау', exact: true }),
+  ).toHaveAttribute('aria-pressed', 'true');
+  expect(coordination(today).expense.shares.map((share) => share.paid)).toEqual([true, false]);
+  await expect(
+    page.getByText(
+      'Бұл — өздерің жүргізетін есеп. Қолданба ақша аудармайды және төлемді тексермейді.',
+    ),
+  ).toBeVisible();
+  passed('expense_split_preserves_rounding_and_marks_only_own_share');
+  await page.getByRole('dialog').evaluate((el) => el.scrollTo(0, 0));
+  await page.screenshot({ path: path.join(output, 'preparation-kk.png') });
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Бүгін', exact: true }).click();
+  const following = new Date(Date.parse(today) + 7 * 86400000).toISOString().slice(0, 10);
+  await page.locator('.date-line input[type=date]').fill(following);
+  await expect(page.locator('.shared-card-main')).toBeVisible();
+  await page.locator('.shared-card-main').click();
+  await expect(page.getByRole('button', { name: 'Келемін', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'false',
+  );
+  await expect(page.getByRole('button', { name: 'Мен келдім', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'false',
+  );
+  await page.getByRole('button', { name: 'Дайындық', exact: true }).click();
+  await expect(page.getByText('Қажет заттар әлі қосылмады.', { exact: true })).toBeVisible();
+  await expect(
+    page.getByText('Жалпы соманы ұйымдастырушы енгізеді.', { exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.locator('.meeting-card').click();
+  await expect(page.getByRole('button', { name: 'Келемін', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  passed('next_week_occurrence_does_not_reuse_attendance_travel_items_or_expense');
   await page.getByRole('dialog').evaluate((el) => el.scrollTo(0, 0));
   await page.screenshot({ path: path.join(output, 'meeting-kk.png') });
   await page.keyboard.press('Escape');
@@ -436,6 +710,20 @@ try {
   );
   expect(errors).toEqual([]);
   passed('russian_light_theme_and_narrow_viewport_without_browser_errors');
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Профиль', exact: true }).click();
+  await page.getByRole('button', { name: 'Приватность', exact: true }).click();
+  const downloaded = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Скачать свои данные', exact: true }).click();
+  const exportPath = path.join(output, 'export-fixture.json');
+  await (await downloaded).saveAs(exportPath);
+  const exported = JSON.parse(await readFile(exportPath, 'utf8'));
+  expect(exported.meetingCoordinationRecords.map((record) => record.key)).toEqual([
+    'first',
+    'second',
+  ]);
+  expect(exported.profile.uid).toBe('alice');
+  passed('private_data_export_includes_all_paginated_coordination_records');
   await writeFile(
     path.join(output, 'report.json'),
     JSON.stringify({ passed: true, checks: results, errors }, null, 2),

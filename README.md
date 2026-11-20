@@ -2,13 +2,14 @@
 
 A Kazakh/Russian PWA for daily plans, shared commitments with friends, reminders and an offline Astana map. The interface follows the approved charcoal/blue DayPact design with local Roboto fonts and the approved logo.
 
-**Live app:** [daypact.vertex-blip.workers.dev](https://daypact.vertex-blip.workers.dev). Cloudflare Free and Firebase Spark are configured. The meetings update passed 118 automated tests and 51 checks against the deployed API using real Firebase identities. See the [release verification record](docs/RELEASE.md) for browser checks, the original release checks and remaining physical-device checks. This is not an independent security audit.
+**Live app:** [daypact.vertex-blip.workers.dev](https://daypact.vertex-blip.workers.dev). Cloudflare Free and Firebase Spark are configured. The coordination update passed 139 automated tests and 98 checks against the deployed API using real Firebase identities. See the [release verification record](docs/RELEASE.md) for browser checks, earlier release checks and remaining physical-device checks. This is not an independent security audit.
 
 ## Product
 
 - Email/password registration, email verification, password reset, profile and account deletion.
 - Personal/shared daily, weekly, monthly and one-time plans; completion, savings contributions and event attendance.
-- Named meetings with several friends, upcoming dates, map place proposals, one vote per participant, organizer confirmation and individual attendance responses.
+- Named and recurring meetings with several friends, upcoming dates, map place proposals, one place vote per participant, organizer confirmation and individual attendance responses.
+- Time availability polls, minimum participant counts, travel updates, claimed supplies and equal shared-expense records. Each occurrence keeps its own attendance, supplies, travel and payment marks; no money is held or transferred.
 - Private friend invitations, per-member permissions, reminders, quiet hours and friend nudges.
 - Kazakh/Russian settings and dark/light/system themes.
 - Offline snapshots and queued changes scoped to the signed-in account, with explicit sync status.

@@ -49,6 +49,7 @@ const planFields = {
   place: placeSchema.nullable().optional(),
   targetAmount: z.number().int().positive().max(1000000000).nullable().optional(),
   remindMinutes: z.number().int().min(-1).max(10080),
+  minAttendees: z.number().int().min(2).max(21).nullable().optional(),
 };
 export const planSchema = z
   .object(planFields)

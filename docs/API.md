@@ -61,21 +61,48 @@ Nudges require current friendship and shared membership, today's occurrence, an 
 
 ## Meetings and proposed places
 
-Named one-time meetings use the existing plan model with `kind: "event"` and `cadence: "once"`. They retain the same membership, friend-invitation, offline creation and authorization rules. The title (for example, Football) and the place label (for example, School football field) are separate fields.
+Named meetings use the existing plan model with `kind: "event"` and cadence `once`, `daily`, `weekly` or `monthly`. They retain the same membership, friend-invitation, offline creation and authorization rules. `minAttendees` is an integer from 2 to 21, defaulting to 2. The title (for example, Football) and the place label (for example, School football field) are separate fields.
 
-| Method and path                     | Request                                               | Response                                                   |
-| ----------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------- |
-| `GET /api/meetings?from=YYYY-MM-DD` | Optional date, default today in the account time zone | `{meetings:Plan[]}`; at most 50 upcoming one-time meetings |
-| `GET /api/plans/:id/places`         | None                                                  | `MeetingPlaces`                                            |
-| `POST /api/plans/:id/places`        | `{operationId:UUID,place:Place}`                      | `MeetingPlaces`; 201 first creation, 200 identical retry   |
-| `PUT /api/plans/:id/place-vote`     | `{optionId:UUID}` or `{optionId:null}` to withdraw    | `{ok:true}`                                                |
-| `POST /api/plans/:id/place-confirm` | `{optionId:UUID,version:number}`                      | `{plan:Plan}`                                              |
+| Method and path                     | Request                                               | Response                                                              |
+| ----------------------------------- | ----------------------------------------------------- | --------------------------------------------------------------------- |
+| `GET /api/meetings?from=YYYY-MM-DD` | Optional date, default today in the account time zone | `{meetings:Plan[]}`; at most 50 meetings, each at its next occurrence |
+| `GET /api/plans/:id/places`         | None                                                  | `MeetingPlaces`                                                       |
+| `POST /api/plans/:id/places`        | `{operationId:UUID,place:Place}`                      | `MeetingPlaces`; 201 first creation, 200 identical retry              |
+| `PUT /api/plans/:id/place-vote`     | `{optionId:UUID}` or `{optionId:null}` to withdraw    | `{ok:true}`                                                           |
+| `POST /api/plans/:id/place-confirm` | `{optionId:UUID,version:number}`                      | `{plan:Plan}`                                                         |
 
-`MeetingPlaces` contains `planVersion` and `options`. Each option contains `id`, `planId`, `proposedBy`, `proposerName`, `place`, `voterIds` and `createdAt`. Only current members can see proposals and voters. The upcoming list uses each meeting's actual date for attendance, rather than today's date, and orders by date, time and ID. Recurring events continue to appear in the daily plan view.
+`MeetingPlaces` contains `planVersion` and `options`. Each option contains `id`, `planId`, `proposedBy`, `proposerName`, `place`, `voterIds` and `createdAt`. Only current members can see proposals and voters. The upcoming list uses each meeting's actual occurrence date for attendance, rather than today's date, and orders by date, time and ID. Recurring events also appear in the daily plan view. Place and time polls apply to the whole series; the interface explains this before an organizer changes its schedule or location.
 
 Each member may propose at most three places, with a maximum of 24 per meeting. Keep the same `operationId` when retrying a proposal: changed content under an existing ID is rejected. Each member has one vote per meeting, which can be moved or withdrawn. A vote cannot target another meeting's option or impersonate another participant. Removing membership cascades its proposals and votes.
 
 The organizer chooses a proposed location using the current version; votes inform that decision and do not automatically finalize it. Adopting a different place updates the meeting and resets attendance for reconfirmation. Someone else's vote or response cannot be edited by the organizer. Proposals, voting and finalization require a connection; a new meeting can use the existing offline creation queue. A place initially picked by the organizer is valid without creating a poll option.
+
+## Meeting coordination
+
+`GET /api/plans/:id/coordination?date=YYYY-MM-DD` returns `MeetingCoordination` from `src/shared/meetingCoordination.ts`. It includes the current plan version, occurrence date, minimum/accepted participant counts, derived confirmation state, series-wide time options, and this occurrence's travel, supplies and expense split. Every read requires current membership. Separate occurrences never inherit each other's attendance, claims, travel or paid marks.
+
+| Method and path                          | Request                                   | Purpose                                                                    |
+| ---------------------------------------- | ----------------------------------------- | -------------------------------------------------------------------------- |
+| `PUT /api/plans/:id/time-options`        | `{version,options:[{id:UUID,date,time}]}` | Organizer replaces 2–6 distinct schedule options.                          |
+| `PUT /api/plans/:id/time-vote`           | `{version,optionIds:UUID[]}`              | Member marks all suitable options; an empty list withdraws availability.   |
+| `POST /api/plans/:id/time-confirm`       | `{version,optionId:UUID}`                 | Organizer adopts an option for the series and returns `{plan:Plan}`.       |
+| `PUT /api/plans/:id/travel`              | `{date,version,status,lateMinutes?}`      | Own `on_way`, `late` or `arrived` state; late minutes are 1–240.           |
+| `POST /api/plans/:id/items`              | `{date,version,operationId:UUID,title}`   | Member creates a supply/task with a stable retry ID.                       |
+| `PATCH /api/plans/:id/items/:itemId`     | `{date,version,title}`                    | Creator or organizer edits an item.                                        |
+| `DELETE /api/plans/:id/items/:itemId`    | `{date,version}`                          | Creator or organizer removes an item.                                      |
+| `PUT /api/plans/:id/items/:itemId/claim` | `{date,version,claimed:boolean}`          | Member claims an unclaimed item or releases their own claim.               |
+| `PUT /api/plans/:id/expense`             | `{date,version,total}`                    | Organizer sets an integer-tenge total; version 0 creates the first budget. |
+| `PUT /api/plans/:id/expense/paid`        | `{date,version,paid:boolean}`             | Accepted member changes only their own payment mark.                       |
+
+Time writes, travel and item creation use the plan version. Existing item mutations use the item's version; expense mutations use the expense version. Strict schemas reject actor overrides and unknown fields. Conflicting writes return `409 VERSION_CONFLICT`; refresh before deciding again. Ordinary occurrence writes are limited to yesterday through 366 days ahead. Travel specifically requires today's occurrence and an accepted RSVP.
+
+Each participant may select several suitable time options. Confirming one changes the series anchor date/time, recalculates reminders and clears applicable attendance. An occurrence is confirmed while accepted attendance is at least `minAttendees`; it becomes unconfirmed again if attendance falls below that threshold.
+
+Item claims use an atomic version/claimant condition: even an organizer cannot assign or release another participant's claim. Changing a claimed item's title clears its claim so the new obligation must be accepted again. Titles are limited to 80 characters. A meeting occurrence allows at most 30 items and a series at most 300 stored items. Creators/organizers may delete historical items with the same authorization and version checks to reclaim capacity.
+
+Expenses split among accepted participants using integer tenge. Remainders are assigned deterministically by sorted participant UID so shares sum exactly to the total. Changes to the total or accepted roster advance the expense version and clear paid marks; old requests cannot mark a new share as paid. The total is 0–1,000,000,000 tenge. A series permits 366 nonzero budgets; the organizer may clear an existing historical budget to zero with its current version. Zero headers retain a monotonic version so an old payment request cannot become valid after clearing/reusing a budget. These are self-reported records, not payment processing or proof of a bank transfer.
+
+Threshold notification receipts permit one alert per occurrence; travel alerts permit one per actor/status/occurrence. Changing late minutes does not send another alert for the same status. Notifications contain generic text, respect quiet hours and enabled preferences, and use the existing bounded delivery queue. Muted events are not replayed later. Delivery is best effort; the meeting view remains the current source of participation status.
 
 ## Notifications
 
@@ -111,6 +138,8 @@ Meeting arrays appear only on the first page and contain the caller's own contri
 The active-plan and proposal limits bound these arrays to 600 places, 200 votes and 200 responses. Other participants' proposals, votes and attendance records are not included in these arrays.
 
 Cursors are bounded, validated base64url date/plan-ID tuples. They confer no authority: every page applies the caller's UID filter. Pages are live reads, not a frozen snapshot; concurrent edits can affect export consistency. The frontend must show an explicit error if its memory/page guard is reached instead of downloading silently truncated data.
+
+`GET /api/export/coordination?limit=1000&cursor=OPAQUE` separately paginates coordination records as `{records:[{kind,key,data}],nextCursor}`. It includes the caller's attendance across recurrences, travel states, time votes and paid marks; items created or claimed by them; and expense totals/time options only for series they organize. It excludes other members' attendance, travel and paid records. Continue until `nextCursor` is null. The frontend merges these pages into `meetingCoordinationRecords` in the downloaded export, with the same account and memory guards as the original export.
 
 ## Errors, quotas and verification
 

@@ -366,7 +366,7 @@ export default function App() {
             (p) => p.id === prev.id && p.date === prev.date,
           );
           if (current) return applyPending([current], uid, queued)[0];
-          if (prev.kind === 'event' && prev.cadence === 'once') return null;
+          if (prev.kind === 'event') return null;
           return prev.date === wantedDate ? null : prev;
         });
         setStale(false);
@@ -634,21 +634,6 @@ export default function App() {
       if (currentAuth()?.currentUser?.uid === uid) setBusy(false);
     }
   }
-  async function rsvp(plan: Plan, status: 'accepted' | 'declined') {
-    await action(async () => {
-      if (!requireOnline()) return;
-      await writeApi(`/plans/${encodeURIComponent(plan.id)}/rsvp`, 'POST', {
-        date: plan.date,
-        status,
-        version: plan.version,
-      });
-      setSelected({
-        ...plan,
-        members: plan.members.map((m) => (m.uid === user?.uid ? { ...m, rsvp: status } : m)),
-      });
-      await refresh();
-    });
-  }
   async function nudge(plan: Plan, toUserId: string) {
     await action(async () => {
       if (!requireOnline()) return;
@@ -787,6 +772,7 @@ export default function App() {
         if (currentAuth()?.currentUser?.uid !== uid) throw new ApiError('UNAUTHENTICATED', 401);
         const data: ExportPage = await api<ExportPage>(
           `/export?limit=1000${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+          { expectedUid: uid },
         );
         bytes += new TextEncoder().encode(JSON.stringify(data)).byteLength;
         if (bytes > 100 * 1024 * 1024) throw new ApiError('EXPORT_TOO_LARGE');
@@ -799,6 +785,26 @@ export default function App() {
         }
       }
       if (!complete || !combined) throw new ApiError('EXPORT_TOO_LARGE');
+      cursor = null;
+      complete = false;
+      const meetingCoordinationRecords: unknown[] = [];
+      for (let page = 0; page < 500; page++) {
+        if (currentAuth()?.currentUser?.uid !== uid) throw new ApiError('UNAUTHENTICATED', 401);
+        const data: { records: unknown[]; nextCursor: string | null } = await api(
+          `/export/coordination?limit=1000${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+          { expectedUid: uid },
+        );
+        bytes += new TextEncoder().encode(JSON.stringify(data)).byteLength;
+        if (bytes > 100 * 1024 * 1024) throw new ApiError('EXPORT_TOO_LARGE');
+        meetingCoordinationRecords.push(...data.records);
+        cursor = data.nextCursor;
+        if (!cursor) {
+          complete = true;
+          break;
+        }
+      }
+      if (!complete) throw new ApiError('EXPORT_TOO_LARGE');
+      combined.meetingCoordinationRecords = meetingCoordinationRecords;
       if (currentAuth()?.currentUser?.uid !== uid) throw new ApiError('UNAUTHENTICATED', 401);
       delete combined.nextCursor;
       const url = URL.createObjectURL(
@@ -982,9 +988,7 @@ export default function App() {
   const pendingCount = pending.length + pendingDrafts.length;
   const mapPlans: Plan[] = [
     ...plans,
-    ...meetings.filter(
-      (meeting) => !plans.some((plan) => plan.id === meeting.id && plan.date === meeting.date),
-    ),
+    ...meetings.filter((meeting) => !plans.some((plan) => plan.id === meeting.id)),
     ...pendingDrafts
       .filter((d) => !d.error && d.input.place)
       .map((d) => ({
@@ -1293,7 +1297,7 @@ export default function App() {
                   }
                   onSelectPlan={(plan) => {
                     if (plan.id.startsWith('pending:')) setSheet('queue');
-                    else if (plan.kind === 'event' && plan.cadence === 'once') openMeeting(plan);
+                    else if (plan.kind === 'event') openMeeting(plan);
                     else setSelected(plan);
                   }}
                   onPickPlace={pickerDraft || meetingProposal?.picking ? pickPlace : undefined}
@@ -1521,9 +1525,9 @@ export default function App() {
           }}
         />
       )}
-      {selected?.kind === 'event' && selected.cadence === 'once' && (
+      {selected?.kind === 'event' && (
         <MeetingDetail
-          key={`${user.uid}:${selected.id}`}
+          key={`${user.uid}:${selected.id}:${selected.date}`}
           plan={selected}
           uid={user.uid}
           locale={locale}
@@ -1534,6 +1538,7 @@ export default function App() {
           proposal={
             meetingProposal?.uid === user.uid &&
             meetingProposal.plan.id === selected.id &&
+            meetingProposal.plan.date === selected.date &&
             meetingProposal.place
               ? { operationId: meetingProposal.operationId, place: meetingProposal.place }
               : undefined
@@ -1570,8 +1575,11 @@ export default function App() {
           onDiscardProposal={() => setMeetingProposal(null)}
           onProposalSaved={() => setMeetingProposal(null)}
           onPlanChanged={(plan) => {
+            if (selected.date !== plan.date) setDate(plan.date);
             setSelected((current) => (current?.id === plan.id ? plan : current));
-            setMeetings((current) => current.map((p) => (p.id === plan.id ? plan : p)));
+            setMeetings((current) =>
+              current.map((p) => (p.id === plan.id && p.date === plan.date ? plan : p)),
+            );
             setPlans((current) =>
               current.map((p) => (p.id === plan.id && p.date === plan.date ? plan : p)),
             );
@@ -1600,7 +1608,7 @@ export default function App() {
           )}
         </Modal>
       )}
-      {selected && !(selected.kind === 'event' && selected.cadence === 'once') && (
+      {selected && selected.kind !== 'event' && (
         <Modal title={selected.title} onClose={closeSelected} closeLabel={t.close}>
           <div className="plan-detail-meta">
             <Clock size={18} />
@@ -1677,24 +1685,6 @@ export default function App() {
                   ? t.markUndone
                   : t.markDone}
             </button>
-            {selected.kind === 'event' && (
-              <div className="form-columns">
-                <button
-                  className="secondary"
-                  disabled={busy}
-                  onClick={() => void rsvp(selected, 'accepted')}
-                >
-                  {t.attending}
-                </button>
-                <button
-                  className="secondary"
-                  disabled={busy}
-                  onClick={() => void rsvp(selected, 'declined')}
-                >
-                  {t.declined}
-                </button>
-              </div>
-            )}
             {selected.ownerId === user.uid && (
               <div className="form-columns">
                 <button
@@ -2095,8 +2085,10 @@ function MeetingCard({
         </span>
         <small>
           <Users size={13} />
-          {going}/{plan.members.length} · {m.going}
+          {going}/{plan.minAttendees ?? 2} ·{' '}
+          {going >= (plan.minAttendees ?? 2) ? m.ready : m.gathering}
         </small>
+        {plan.cadence !== 'once' && <small>{texts(locale)[plan.cadence]}</small>}
       </span>
       <ChevronRight size={18} />
     </button>

@@ -44,6 +44,7 @@ export interface PlanInput {
   place?: Place | null;
   targetAmount?: number | null;
   remindMinutes: number;
+  minAttendees?: number | null;
 }
 export interface MemberProgress {
   uid: string;

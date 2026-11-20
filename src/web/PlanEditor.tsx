@@ -38,8 +38,7 @@ export function PlanEditor({
 }: Props) {
   const t = texts(locale);
   const initial = value.draft ?? value.plan;
-  const meeting =
-    value.mode === 'meeting' || (initial?.kind === 'event' && initial.cadence === 'once');
+  const meeting = value.mode === 'meeting' || initial?.kind === 'event';
   const m = meetingTexts(locale);
   const [kind, setKind] = useState<PlanKind>(initial?.kind ?? (meeting ? 'event' : 'habit'));
   const [cadence, setCadence] = useState<Cadence>(initial?.cadence ?? (meeting ? 'once' : 'daily'));
@@ -62,6 +61,7 @@ export function PlanEditor({
       place,
       targetAmount: kind === 'savings' ? Number(d.get('target')) : null,
       remindMinutes: Number(d.get('reminder') ?? 15),
+      ...(kind === 'event' ? { minAttendees: Number(d.get('minimum') ?? 2) } : {}),
     };
   }
   async function submit(e: FormEvent<HTMLFormElement>) {
@@ -70,6 +70,15 @@ export function PlanEditor({
     const input = read(e.currentTarget);
     if (meeting && !value.plan && input.memberIds.length === 0) {
       setError(m.pickFriends);
+      return;
+    }
+    if (
+      meeting &&
+      (!Number.isInteger(input.minAttendees) ||
+        Number(input.minAttendees) < 2 ||
+        Number(input.minAttendees) > 21)
+    ) {
+      setError(m.minimumInvalid);
       return;
     }
     if (
@@ -138,6 +147,38 @@ export function PlanEditor({
             </label>
           </div>
         )}
+        {meeting && (
+          <div className="form-columns">
+            <label>
+              {t.cadence}
+              <select
+                name="cadence"
+                value={cadence}
+                onChange={(e) => setCadence(e.target.value as Cadence)}
+              >
+                {(['once', 'daily', 'weekly', 'monthly'] as const).map((value) => (
+                  <option key={value} value={value}>
+                    {t[value]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              {m.minimum}
+              <input
+                name="minimum"
+                type="number"
+                inputMode="numeric"
+                min={2}
+                max={21}
+                step={1}
+                required
+                defaultValue={initial?.minAttendees ?? 2}
+              />
+            </label>
+          </div>
+        )}
+        {meeting && <p className="form-note">{m.minimumNote}</p>}
         <div className="form-columns">
           <label>
             {t.date}
@@ -245,6 +286,7 @@ export function PlanEditor({
           {t.timezoneHint} · {timeZone}
         </p>
         {meeting && value.plan && <p className="form-note">{m.changedNote}</p>}
+        {meeting && cadence !== 'once' && value.plan && <p className="form-note">{m.seriesNote}</p>}
         {error && <p className="inline-message error">{error}</p>}
         <button className="primary full" disabled={busy}>
           {busy ? t.loading : meeting && !value.plan ? m.create : t.save}

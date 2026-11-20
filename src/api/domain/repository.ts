@@ -31,6 +31,7 @@ export interface PlanRow {
   place_json: string | null;
   target_amount: number | null;
   remind_minutes: number;
+  min_attendees: number;
   version: number;
   mutation_id: string;
   next_reminder_at: string | null;
@@ -146,6 +147,7 @@ export async function serializePlan(db: D1Database, row: PlanRow, date: string):
     place: row.place_json ? JSON.parse(row.place_json) : null,
     targetAmount: row.target_amount,
     remindMinutes: row.remind_minutes,
+    minAttendees: row.min_attendees,
     version: row.version,
     date,
     members: progress.results.map((m) => ({
@@ -223,6 +225,7 @@ export function rowInput(row: PlanRow, memberIds: string[]): PlanInput {
     place: row.place_json ? JSON.parse(row.place_json) : null,
     targetAmount: row.target_amount,
     remindMinutes: row.remind_minutes,
+    minAttendees: row.min_attendees,
   };
 }
 export async function sha256(text: string): Promise<string> {

@@ -95,7 +95,7 @@ beforeAll(async () => {
     }),
   );
   const db = (await mf.getD1Database('DB')) as unknown as D1Database;
-  const sql = ['0001_initial.sql', '0002_meetings.sql']
+  const sql = ['0001_initial.sql', '0002_meetings.sql', '0003_coordination.sql']
     .map((name) => readFileSync(new URL(`../../migrations/${name}`, import.meta.url), 'utf8'))
     .join('\n');
   // D1 exec accepts a line per statement; keep CREATE TRIGGER blocks intact.
@@ -163,13 +163,13 @@ describe('meeting coordination', () => {
     });
     await meeting({ startDate: addDays(today(), -1), memberIds: ['bob'] });
     await meeting({ startDate: today() });
-    await plan('alice', { kind: 'event', cadence: 'daily', memberIds: ['bob'] });
+    const daily = await plan('alice', { kind: 'event', cadence: 'daily', memberIds: ['bob'] });
     expect((await answer('bob', later)).status).toBe(200);
     const list = await json('bob', `/meetings?from=${today()}`);
     expect(list.status).toBe(200);
-    expect(list.data.meetings.map((p: Plan) => p.id)).toEqual([sooner.id, later.id]);
-    expect(list.data.meetings[0].members.find((m: any) => m.uid === 'bob').rsvp).toBe('pending');
-    expect(list.data.meetings[1].members.find((m: any) => m.uid === 'bob').rsvp).toBe('accepted');
+    expect(list.data.meetings.map((p: Plan) => p.id)).toEqual([daily.id, sooner.id, later.id]);
+    expect(list.data.meetings[1].members.find((m: any) => m.uid === 'bob').rsvp).toBe('pending');
+    expect(list.data.meetings[2].members.find((m: any) => m.uid === 'bob').rsvp).toBe('accepted');
     expect((await json('mallory', '/meetings')).data.meetings).toEqual([]);
     expect((await json('bob', '/meetings?from=2026-02-30')).status).toBe(400);
   });
@@ -635,6 +635,636 @@ describe('sharing and ownership', () => {
     expect(edited.data.plan.members).toHaveLength(21);
   });
 });
+describe('extended meeting coordination', () => {
+  const meeting = (changes: Partial<PlanInput> = {}) =>
+    plan('alice', { kind: 'event', cadence: 'daily', remindMinutes: -1, ...changes });
+  const state = async (uid: string, p: Plan, date = today()) =>
+    (await json(uid, `/plans/${p.id}/coordination?date=${date}`)).data;
+  const answer = (uid: string, p: Plan, status = 'accepted', date = today()) =>
+    json(uid, `/plans/${p.id}/rsvp`, 'POST', { date, status, version: p.version });
+  const put = (uid: string, p: Plan, suffix: string, body: unknown) =>
+    json(uid, `/plans/${p.id}/${suffix}`, 'PUT', body);
+  const item = (
+    uid: string,
+    p: Plan,
+    title = 'Доп',
+    date = today(),
+    operationId = crypto.randomUUID(),
+  ) => json(uid, `/plans/${p.id}/items`, 'POST', { date, version: p.version, title, operationId });
+  it('exposes recurring next occurrences and isolates attendance by occurrence', async () => {
+    await befriend('alice', 'bob');
+    const p = await meeting({
+      memberIds: ['bob'],
+      cadence: 'weekly',
+      startDate: addDays(today(), -14),
+    });
+    await answer('bob', p);
+    const next = (await json('bob', `/meetings?from=${addDays(today(), 1)}`)).data.meetings[0];
+    expect(next.date).toBe(addDays(today(), 7));
+    expect(next.members.find((m: any) => m.uid === 'bob').rsvp).toBe('pending');
+    expect((await state('bob', p)).acceptedCount).toBe(1);
+    expect(
+      (await json('bob', `/plans/${p.id}/coordination?date=${addDays(today(), 1)}`)).data.error
+        .code,
+    ).toBe('INVALID_OCCURRENCE');
+    expect((await json('mallory', `/plans/${p.id}/coordination?date=${today()}`)).status).toBe(404);
+    const month = await meeting({ cadence: 'monthly', startDate: '2026-01-31' });
+    const feb = (await json('alice', '/meetings?from=2027-02-01')).data.meetings.find(
+      (m: any) => m.id === month.id,
+    );
+    expect(feb.date).toBe('2027-02-28');
+  });
+  it('validates attendee thresholds and binds nondefault thresholds to creation receipts', async () => {
+    const headers = { 'Idempotency-Key': crypto.randomUUID() },
+      body = input({ kind: 'event', minAttendees: 6 });
+    expect((await json('alice', '/plans', 'POST', body, headers)).status).toBe(201);
+    expect((await json('alice', '/plans', 'POST', body, headers)).status).toBe(200);
+    expect(
+      (await json('alice', '/plans', 'POST', { ...body, minAttendees: 10 }, headers)).data.error
+        .code,
+    ).toBe('OPERATION_CONFLICT');
+    const defaults = { 'Idempotency-Key': crypto.randomUUID() },
+      original = input({ kind: 'event' });
+    const first = await json('alice', '/plans', 'POST', original, defaults);
+    const hash = await import('../../src/api/domain/repository').then((m) =>
+      m.sha256(
+        JSON.stringify({
+          title: original.title,
+          description: '',
+          kind: original.kind,
+          cadence: original.cadence,
+          startDate: original.startDate,
+          time: original.time,
+          timeZone: null,
+          memberIds: ['alice'],
+          place: null,
+          targetAmount: null,
+          remindMinutes: original.remindMinutes,
+        }),
+      ),
+    );
+    expect(
+      (
+        await env.DB.prepare(
+          'SELECT fingerprint FROM plan_create_operations WHERE user_id=? AND operation_id=?',
+        )
+          .bind('alice', defaults['Idempotency-Key'])
+          .first()
+      )?.fingerprint,
+    ).toBe(hash);
+    const retry = await json('alice', '/plans', 'POST', { ...original, minAttendees: 2 }, defaults);
+    expect(retry.status).toBe(200);
+    expect(retry.data.plan.id).toBe(first.data.plan.id);
+    expect((await json('alice', '/plans', 'POST', input({ minAttendees: 22 }))).status).toBe(400);
+  });
+  it('computes threshold from current attendance without carrying it to tomorrow', async () => {
+    await befriend('alice', 'bob');
+    const p = await meeting({ memberIds: ['bob'], minAttendees: 2 });
+    expect((await state('bob', p)).confirmed).toBe(false);
+    await answer('alice', p);
+    await answer('bob', p);
+    expect((await state('bob', p)).confirmed).toBe(true);
+    expect((await state('bob', p, addDays(today(), 1))).confirmed).toBe(false);
+    await answer('bob', p, 'declined');
+    expect((await state('alice', p)).confirmed).toBe(false);
+  });
+  it('coordinates multiple available times, denies outsiders, and resets attendance on CAS confirmation', async () => {
+    await befriend('alice', 'bob');
+    const p = await meeting({ memberIds: ['bob'] });
+    const options = [
+      { id: crypto.randomUUID(), date: today(), time: '20:00' },
+      { id: crypto.randomUUID(), date: addDays(today(), 1), time: '18:00' },
+    ];
+    expect((await put('bob', p, 'time-options', { version: p.version, options })).status).toBe(403);
+    expect((await put('alice', p, 'time-options', { version: p.version, options })).status).toBe(
+      200,
+    );
+    p.version++;
+    await answer('bob', p);
+    expect(
+      (
+        await put('bob', p, 'time-vote', {
+          version: p.version,
+          optionIds: options.map((o) => o.id),
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (await state('alice', p)).timeOptions.options.every(
+        (o: any) => o.availableUserIds[0] === 'bob',
+      ),
+    ).toBe(true);
+    expect(
+      (await put('mallory', p, 'time-vote', { version: p.version, optionIds: [] })).status,
+    ).toBe(404);
+    expect(
+      (await put('bob', p, 'time-vote', { version: p.version, optionIds: [crypto.randomUUID()] }))
+        .status,
+    ).toBe(409);
+    expect(
+      (await put('bob', p, 'time-vote', { version: p.version, optionIds: [], uid: 'alice' }))
+        .status,
+    ).toBe(400);
+    const winner = await json('alice', `/plans/${p.id}/time-confirm`, 'POST', {
+      version: p.version,
+      optionId: options[0].id,
+    });
+    expect(winner.status).toBe(200);
+    expect(winner.data.plan.time).toBe('20:00');
+    expect(winner.data.plan.members.find((m: any) => m.uid === 'bob').rsvp).toBe('pending');
+    expect((await put('bob', p, 'time-vote', { version: p.version, optionIds: [] })).status).toBe(
+      409,
+    );
+    expect(
+      (
+        await json('alice', `/plans/${p.id}/time-confirm`, 'POST', {
+          version: p.version,
+          optionId: options[1].id,
+        })
+      ).status,
+    ).toBe(409);
+    const replaced = await put('alice', p, 'time-options', {
+      version: winner.data.plan.version,
+      options,
+    });
+    expect(replaced.status).toBe(200);
+    expect(
+      (await state('alice', p)).timeOptions.options.every(
+        (o: any) => o.availableUserIds.length === 0,
+      ),
+    ).toBe(true);
+  });
+  it('keeps series place polls available for recurring meetings', async () => {
+    const p = await meeting(),
+      operationId = crypto.randomUUID();
+    expect(
+      (
+        await json('alice', `/plans/${p.id}/places`, 'POST', {
+          operationId,
+          place: { lat: 51.1, lng: 71.4, label: 'Алаң' },
+        })
+      ).status,
+    ).toBe(201);
+    const confirmed = await json('alice', `/plans/${p.id}/place-confirm`, 'POST', {
+      version: p.version,
+      optionId: operationId,
+    });
+    expect(confirmed.status).toBe(200);
+    expect(confirmed.data.plan.cadence).toBe('daily');
+  });
+  it('allows only own accepted travel today, validates lateness and removes travel when declined', async () => {
+    await befriend('alice', 'bob');
+    const p = await meeting({ memberIds: ['bob'] });
+    const body = { date: today(), version: p.version, status: 'late', lateMinutes: 15 };
+    expect((await put('bob', p, 'travel', body)).data.error.code).toBe('ACCEPTED_REQUIRED');
+    await answer('bob', p);
+    expect((await put('bob', p, 'travel', { ...body, uid: 'alice' })).status).toBe(400);
+    expect((await put('bob', p, 'travel', { ...body, lateMinutes: 241 })).status).toBe(400);
+    expect(
+      (await put('bob', p, 'travel', { ...body, date: addDays(today(), 1) })).data.error.code,
+    ).toBe('TRAVEL_TODAY_ONLY');
+    expect((await put('bob', p, 'travel', body)).status).toBe(200);
+    expect((await state('alice', p)).travel[0]).toMatchObject({
+      uid: 'bob',
+      status: 'late',
+      lateMinutes: 15,
+    });
+    expect(
+      (await put('bob', p, 'travel', { date: today(), version: p.version, status: 'arrived' }))
+        .status,
+    ).toBe(200);
+    expect((await state('alice', p, addDays(today(), 1))).travel).toEqual([]);
+    await answer('bob', p, 'declined');
+    expect((await state('alice', p)).travel).toEqual([]);
+  });
+  it('creates items idempotently and never restores removed items or other actors claims', async () => {
+    await befriend('alice', 'bob');
+    const p = await meeting({ memberIds: ['bob'] }),
+      operationId = crypto.randomUUID();
+    const replies = await Promise.all([
+      item('alice', p, 'Доп', today(), operationId),
+      item('alice', p, 'Доп', today(), operationId),
+    ]);
+    expect(replies.every((r) => r.status === 200)).toBe(true);
+    expect((await state('bob', p)).items).toHaveLength(1);
+    expect((await item('alice', p, 'Су', today(), operationId)).data.error.code).toBe(
+      'OPERATION_CONFLICT',
+    );
+    expect((await item('bob', p, 'Доп', today(), operationId)).data.error.code).toBe(
+      'OPERATION_CONFLICT',
+    );
+    const claims = await Promise.all(
+      ['alice', 'bob'].map((uid) =>
+        put(uid, p, `items/${operationId}/claim`, { date: today(), version: 1, claimed: true }),
+      ),
+    );
+    expect(claims.map((r) => r.status).sort()).toEqual([200, 409]);
+    const claimed = (await state('alice', p)).items[0];
+    const other = claimed.claimedBy === 'alice' ? 'bob' : 'alice';
+    expect(
+      (
+        await put(other, p, `items/${operationId}/claim`, {
+          date: today(),
+          version: claimed.version,
+          claimed: false,
+        })
+      ).data.error.code,
+    ).toBe('ITEM_CLAIMED');
+    expect(
+      (
+        await put(claimed.claimedBy, p, `items/${operationId}/claim`, {
+          date: today(),
+          version: claimed.version,
+          claimed: false,
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await json('alice', `/plans/${p.id}/items/${operationId}`, 'DELETE', {
+          date: today(),
+          version: claimed.version + 1,
+        })
+      ).status,
+    ).toBe(200);
+    expect((await item('alice', p, 'Доп', today(), operationId)).data.error.code).toBe(
+      'ITEM_NOT_FOUND',
+    );
+  });
+  it('isolates occurrence items and restricts edits to creator/organizer with version CAS', async () => {
+    await befriend('alice', 'bob');
+    await befriend('alice', 'carol');
+    const p = await meeting({ memberIds: ['bob', 'carol'] });
+    await item('bob', p);
+    const i = (await state('carol', p)).items[0];
+    expect((await state('bob', p, addDays(today(), 1))).items).toEqual([]);
+    expect(
+      (
+        await json('carol', `/plans/${p.id}/items/${i.id}`, 'PATCH', {
+          date: today(),
+          version: i.version,
+          title: 'Жаңа',
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await json('alice', `/plans/${p.id}/items/${i.id}`, 'PATCH', {
+          date: today(),
+          version: i.version,
+          title: 'Жаңа',
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await put('bob', p, `items/${i.id}/claim`, {
+          date: today(),
+          version: i.version,
+          claimed: true,
+        })
+      ).status,
+    ).toBe(409);
+    expect(
+      (
+        await put('carol', p, `items/${i.id}/claim`, {
+          date: today(),
+          version: i.version + 1,
+          claimed: true,
+        })
+      ).status,
+    ).toBe(200);
+    await json('carol', '/friends/alice', 'DELETE');
+    expect((await state('bob', p)).items[0].claimedBy).toBe(null);
+    await json('bob', '/friends/alice', 'DELETE');
+    expect((await state('alice', p)).items).toEqual([]);
+  });
+  it('enforces item limits concurrently and rolls back failed receipts', async () => {
+    const p = await meeting();
+    const outcomes = await Promise.all(
+      Array.from({ length: 32 }, (_, n) => item('alice', p, `Item ${n}`)),
+    );
+    expect(outcomes.filter((r) => r.status === 200)).toHaveLength(30);
+    expect(outcomes.filter((r) => r.data.error?.code === 'COORDINATION_LIMIT')).toHaveLength(2);
+    expect(
+      (await env.DB.prepare('SELECT count(*) AS n FROM meeting_item_operations').first())?.n,
+    ).toBe(30);
+  });
+  it('splits exact integer tenge among accepted members and clears self-paid on roster/total changes', async () => {
+    await befriend('alice', 'bob');
+    await befriend('alice', 'carol');
+    const p = await meeting({ memberIds: ['bob', 'carol'] });
+    await answer('alice', p);
+    await answer('bob', p);
+    await answer('carol', p);
+    expect((await put('bob', p, 'expense', { date: today(), version: 0, total: 100 })).status).toBe(
+      403,
+    );
+    expect(
+      (await put('alice', p, 'expense', { date: today(), version: 0, total: 100 })).status,
+    ).toBe(200);
+    let s = await state('alice', p);
+    expect(s.expense.shares.map((x: any) => x.amount)).toEqual([34, 33, 33]);
+    expect(
+      (
+        await put('bob', p, 'expense/paid', {
+          date: today(),
+          version: s.expense.version,
+          paid: true,
+          uid: 'alice',
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await put('bob', p, 'expense/paid', {
+          date: today(),
+          version: s.expense.version,
+          paid: true,
+        })
+      ).status,
+    ).toBe(200);
+    expect((await state('alice', p)).expense.shares.find((x: any) => x.uid === 'bob').paid).toBe(
+      true,
+    );
+    await answer('carol', p, 'declined');
+    expect(
+      (
+        await put('bob', p, 'expense/paid', {
+          date: today(),
+          version: s.expense.version,
+          paid: true,
+        })
+      ).status,
+    ).toBe(409);
+    s = await state('alice', p);
+    expect(s.expense.shares.map((x: any) => x.amount)).toEqual([50, 50]);
+    expect(s.expense.shares.every((x: any) => !x.paid)).toBe(true);
+    await put('bob', p, 'expense/paid', { date: today(), version: s.expense.version, paid: true });
+    expect(
+      (await put('alice', p, 'expense', { date: today(), version: s.expense.version, total: 101 }))
+        .status,
+    ).toBe(200);
+    s = await state('alice', p);
+    expect(s.expense.shares.map((x: any) => x.amount)).toEqual([51, 50]);
+    expect(s.expense.shares.every((x: any) => !x.paid)).toBe(true);
+    expect((await state('alice', p, addDays(today(), 1))).expense.total).toBe(0);
+  });
+  it('clears a claimed obligation when its title changes and rejects the obsolete claim version', async () => {
+    await befriend('alice', 'bob');
+    const p = await meeting({ memberIds: ['bob'] });
+    await item('alice', p);
+    const i = (await state('alice', p)).items[0];
+    await put('bob', p, `items/${i.id}/claim`, { date: today(), version: 1, claimed: true });
+    expect(
+      (
+        await json('alice', `/plans/${p.id}/items/${i.id}`, 'PATCH', {
+          date: today(),
+          version: 2,
+          title: 'Су',
+        })
+      ).status,
+    ).toBe(200);
+    expect((await state('bob', p)).items[0]).toMatchObject({
+      title: 'Су',
+      claimedBy: null,
+      version: 3,
+    });
+    expect(
+      (await put('bob', p, `items/${i.id}/claim`, { date: today(), version: 2, claimed: true }))
+        .status,
+    ).toBe(409);
+  });
+  it('allows authorized historical cleanup to release item and positive-budget capacity without version reuse', async () => {
+    const p = await meeting({ startDate: addDays(today(), -400) });
+    const oldItems = Array.from({ length: 300 }, (_, n) => ({
+      id: crypto.randomUUID(),
+      date: addDays(today(), -2 - Math.floor(n / 30)),
+    }));
+    await env.DB.prepare(
+      "INSERT INTO meeting_items(id,plan_id,occurrence_date,created_by,title) SELECT json_extract(value,'$.id'),?,json_extract(value,'$.date'),?,'Old' FROM json_each(?)",
+    )
+      .bind(p.id, 'alice', JSON.stringify(oldItems))
+      .run();
+    expect((await item('alice', p)).data.error.code).toBe('COORDINATION_LIMIT');
+    const old = oldItems[0];
+    expect(
+      (
+        await json('alice', `/plans/${p.id}/items/${old.id}`, 'DELETE', {
+          date: old.date,
+          version: 1,
+        })
+      ).status,
+    ).toBe(200);
+    expect((await item('alice', p)).status).toBe(200);
+    const dates = Array.from({ length: 366 }, (_, n) => addDays(today(), -2 - n));
+    await env.DB.prepare(
+      'INSERT INTO meeting_expenses(plan_id,occurrence_date,total) SELECT ?,value,100 FROM json_each(?)',
+    )
+      .bind(p.id, JSON.stringify(dates))
+      .run();
+    expect(
+      (await put('alice', p, 'expense', { date: today(), version: 0, total: 100 })).data.error.code,
+    ).toBe('COORDINATION_LIMIT');
+    expect(
+      (await put('alice', p, 'expense', { date: dates[0], version: 1, total: 0 })).status,
+    ).toBe(200);
+    expect((await state('alice', p, dates[0])).expense).toMatchObject({ version: 2, total: 0 });
+    expect(
+      (await put('alice', p, 'expense', { date: dates[0], version: 1, total: 0 })).status,
+    ).toBe(409);
+    expect(
+      (await put('alice', p, 'expense', { date: dates[0], version: 2, total: 100 })).data.error
+        .code,
+    ).toBe('OCCURRENCE_WINDOW');
+    expect(
+      (await put('alice', p, 'expense', { date: today(), version: 0, total: 100 })).status,
+    ).toBe(200);
+    expect(
+      (await put('alice', p, 'expense/paid', { date: dates[0], version: 1, paid: true })).data.error
+        .code,
+    ).toBe('OCCURRENCE_WINDOW');
+    expect((await answer('alice', p, 'accepted', addDays(today(), 367))).data.error.code).toBe(
+      'OCCURRENCE_WINDOW',
+    );
+  });
+  it('keeps old stored items and budgets clearable after a weekly series is reanchored', async () => {
+    await befriend('alice', 'bob');
+    const oldDate = addDays(today(), -1),
+      p = await meeting({ cadence: 'weekly', startDate: oldDate, memberIds: ['bob'] });
+    await item('alice', p, 'Доп', oldDate);
+    await item('bob', p, 'Су', oldDate);
+    const original = await state('alice', p, oldDate),
+      ownerItem = original.items.find((i: any) => i.createdBy === 'alice'),
+      ownItem = original.items.find((i: any) => i.createdBy === 'bob');
+    await put('alice', p, 'expense', { date: oldDate, version: 0, total: 100 });
+    const options = [
+      { id: crypto.randomUUID(), date: addDays(today(), 1), time: '20:00' },
+      { id: crypto.randomUUID(), date: addDays(today(), 2), time: '21:00' },
+    ];
+    await put('alice', p, 'time-options', { version: p.version, options });
+    const changed = await json('alice', `/plans/${p.id}/time-confirm`, 'POST', {
+      version: 2,
+      optionId: options[0].id,
+    });
+    expect(changed.status).toBe(200);
+    p.version = changed.data.plan.version;
+    expect((await item('bob', p, 'New', oldDate)).data.error.code).toBe('INVALID_OCCURRENCE');
+    expect(
+      (
+        await put('bob', p, `items/${ownItem.id}/claim`, {
+          date: oldDate,
+          version: 1,
+          claimed: true,
+        })
+      ).data.error.code,
+    ).toBe('INVALID_OCCURRENCE');
+    expect(
+      (
+        await json('bob', `/plans/${p.id}/items/${ownItem.id}`, 'PATCH', {
+          date: oldDate,
+          version: 1,
+          title: 'New',
+        })
+      ).data.error.code,
+    ).toBe('INVALID_OCCURRENCE');
+    expect(
+      (await put('alice', p, 'expense', { date: oldDate, version: 1, total: 200 })).data.error.code,
+    ).toBe('INVALID_OCCURRENCE');
+    expect(
+      (await put('bob', p, 'expense/paid', { date: oldDate, version: 1, paid: true })).data.error
+        .code,
+    ).toBe('INVALID_OCCURRENCE');
+    expect(
+      (
+        await json('bob', `/plans/${p.id}/items/${ownerItem.id}`, 'DELETE', {
+          date: oldDate,
+          version: 1,
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await json('bob', `/plans/${p.id}/items/${ownItem.id}`, 'DELETE', {
+          date: oldDate,
+          version: 1,
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await json('alice', `/plans/${p.id}/items/${ownerItem.id}`, 'DELETE', {
+          date: addDays(oldDate, -7),
+          version: 1,
+        })
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await json('alice', `/plans/${p.id}/items/${ownerItem.id}`, 'DELETE', {
+          date: oldDate,
+          version: 1,
+        })
+      ).status,
+    ).toBe(200);
+    expect((await put('bob', p, 'expense', { date: oldDate, version: 1, total: 0 })).status).toBe(
+      403,
+    );
+    expect(
+      (await put('mallory', p, 'expense', { date: oldDate, version: 1, total: 0 })).status,
+    ).toBe(404);
+    expect((await put('alice', p, 'expense', { date: oldDate, version: 1, total: 0 })).status).toBe(
+      200,
+    );
+    expect((await put('alice', p, 'expense', { date: oldDate, version: 1, total: 0 })).status).toBe(
+      409,
+    );
+    expect(
+      (await put('alice', p, 'expense', { date: addDays(oldDate, -7), version: 1, total: 0 }))
+        .status,
+    ).toBe(409);
+    expect(
+      await env.DB.prepare(
+        'SELECT total,version FROM meeting_expenses WHERE plan_id=? AND occurrence_date=?',
+      )
+        .bind(p.id, oldDate)
+        .first(),
+    ).toEqual({ total: 0, version: 2 });
+  });
+  it('exports every own coordination category with cursor paging and no other members private contributions', async () => {
+    await befriend('alice', 'bob');
+    const p = await meeting({ memberIds: ['bob'] });
+    const options = [
+      { id: crypto.randomUUID(), date: today(), time: '20:00' },
+      { id: crypto.randomUUID(), date: today(), time: '21:00' },
+    ];
+    await put('alice', p, 'time-options', { version: 1, options });
+    p.version = 2;
+    await put('bob', p, 'time-vote', { version: 2, optionIds: [options[0].id] });
+    await answer('alice', p);
+    await answer('bob', p);
+    await put('bob', p, 'travel', { date: today(), version: 2, status: 'on_way' });
+    await item('bob', p, 'Су');
+    await item('alice', p, 'Доп');
+    await put('alice', p, 'expense', { date: today(), version: 0, total: 100 });
+    await put('bob', p, 'expense/paid', { date: today(), version: 1, paid: true });
+    const records: any[] = [];
+    let cursor: string | null = null;
+    do {
+      const r = await json(
+        'bob',
+        `/export/coordination?limit=2${cursor ? `&cursor=${cursor}` : ''}`,
+      );
+      expect(r.status).toBe(200);
+      expect(r.data.records.length).toBeLessThanOrEqual(2);
+      records.push(...r.data.records);
+      cursor = r.data.nextCursor;
+    } while (cursor);
+    expect(records.map((r) => r.kind)).toEqual([
+      'attendance',
+      'item',
+      'paid',
+      'time-vote',
+      'travel',
+    ]);
+    expect(records.find((r) => r.kind === 'item').data.title).toBe('Су');
+    const owner = (await json('alice', '/export/coordination')).data.records;
+    expect(owner.filter((r: any) => r.kind === 'time-option')).toHaveLength(2);
+    expect(owner.some((r: any) => r.kind === 'expense')).toBe(true);
+    expect(owner.some((r: any) => r.kind === 'paid' || r.kind === 'travel')).toBe(false);
+    expect((await json('mallory', '/export/coordination')).data.records).toEqual([]);
+    expect((await json('bob', '/export/coordination?cursor=invalid')).data.error.code).toBe(
+      'INVALID_CURSOR',
+    );
+    await json('bob', '/me', 'DELETE');
+    expect((await state('alice', p)).travel).toEqual([]);
+    expect((await state('alice', p)).items.map((i: any) => i.title)).toEqual(['Доп']);
+  });
+  it('does not resurrect paid flags when a roster returns to its previous members or a concurrent split changes', async () => {
+    await befriend('alice', 'bob');
+    const p = await meeting({ memberIds: ['bob'] });
+    await answer('alice', p);
+    await answer('bob', p);
+    await put('alice', p, 'expense', { date: today(), version: 0, total: 100 });
+    let s = await state('alice', p);
+    await put('bob', p, 'expense/paid', { date: today(), version: s.expense.version, paid: true });
+    await answer('bob', p, 'declined');
+    await answer('bob', p);
+    s = await state('alice', p);
+    expect(s.expense.shares.every((x: any) => !x.paid)).toBe(true);
+    const race = await Promise.all([
+      put('bob', p, 'expense/paid', { date: today(), version: s.expense.version, paid: true }),
+      put('alice', p, 'expense', { date: today(), version: s.expense.version, total: 200 }),
+    ]);
+    expect(race[1].status).toBe(200);
+    expect((await state('alice', p)).expense.shares.every((x: any) => !x.paid)).toBe(true);
+    await json('bob', '/friends/alice', 'DELETE');
+    s = await state('alice', p);
+    expect(s.expense.shares).toHaveLength(1);
+    expect(s.expense.shares[0].amount).toBe(200);
+  });
+});
+
 describe('offline operations and reminders', () => {
   it('creates an offline plan exactly once under concurrent retries and binds the key to its payload', async () => {
     const headers = { 'Idempotency-Key': crypto.randomUUID() },

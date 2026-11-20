@@ -1,5 +1,16 @@
 # DayPact release verification
 
+## 20 November 2026 — coordination expansion
+
+- Added series-wide time availability polls, minimum attendance, own travel states, self-claimed supplies, recurring meetings with separate occurrence data, and equal integer-tenge expense records with own payment marks. These are recordkeeping features, not payment processing.
+- Applied additive D1 migration `0003_coordination.sql`. Final Worker version: `088607f4-2c0e-485a-be8a-50cc5b77a463`. Previous migrations remain unchanged. Kazakh/Russian and light/dark appearance retain the existing design, with three sections inside a meeting.
+- TypeScript, production build and **139 tests across 11 files passed**, including **61 real D1 API tests** and **6 notification queue tests**. All 43 packaged map resources pass integrity verification. No dependencies were added or changed.
+- Local browser verification passed **14 meeting scenarios** and **8 existing UI scenarios**. Covered all six additions, future/recurring occurrence separation, delayed map readiness, lost-response retries, stale versions and paginated coordination export. The legacy map focus effect fails the delayed-readiness regression; the fixed effect passes.
+- **98 live API checks passed** with four real Firebase identities: time options/availability/confirmation, recurrence, threshold counts, actor-bound travel, concurrent supply claim protection, exact expense splits, stale payment rejection, membership removal and occurrence isolation. Fixture notifications were disabled. All four identities and application data were removed with no pending cleanup.
+- Final live browser verification on `088607f4-2c0e-485a-be8a-50cc5b77a463` passed **14 checks** with two real Firebase users, no identity/API mocks, and fixture notifications disabled. Covered all six features, the exact 18,001-tenge split, only the responding member's paid mark, recurring isolation, time-confirmation resets, Kazakh dark/Russian light appearance, and historical cleanup after re-anchoring. Old-date claim/payment requests remained rejected while authorized cleanup succeeded. No browser exceptions, CSP violations, unexpected API errors or horizontal mobile overflow were recorded. Both accounts and application data were erased with no pending cleanup.
+- Historical item deletion and clearing an existing expense to zero remain possible after a series is re-anchored to another date. Current membership, creator/organizer ownership, exact stored date and record version still apply; creating, claiming or paying on an invalid occurrence remains prohibited. Dedicated regressions cover both cleanup access and rejected mutations.
+- Threshold and travel alerts use generic text and durable anti-repeat receipts. Queue tests verify current membership/state, mute preferences, quiet hours, occurrence bounds and concurrent requests. These tests do not prove delivery on a physical phone.
+
 ## 20 November 2026 — shared meetings
 
 Published to the same Cloudflare origin with additive D1 migration `0002_meetings.sql`. Worker version: `6c5cc619-3dcd-452d-87d7-a7d86581d920`.
