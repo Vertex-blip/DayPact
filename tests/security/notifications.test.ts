@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { readFileSync } from 'node:fs';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { createLocalJWKSet, exportJWK, exportPKCS8, generateKeyPair, SignJWT } from 'jose';
-import { deliverNotifications } from '../../src/api/notifications';
+import { deliverNotifications, sendTestPush } from '../../src/api/notifications';
 import { createAuthenticator } from '../../src/api/auth';
 import { DEFAULT_SETTINGS } from '../../src/shared/contracts';
 import type { Env } from '../../src/api/types';
@@ -240,6 +240,111 @@ describe('FCM delivery and privacy', () => {
     await deliverNotifications(env, now);
     expect(sends).toHaveLength(0);
     expect((await pending())?.state).toBe('skipped');
+  });
+});
+
+describe('explicit current-device push diagnostics', () => {
+  it('only sends to the caller-owned device and returns provider acceptance', async () => {
+    await addDevice('device-2');
+    expect(await sendTestPush(env, 'alice', 'device-1', 'ru')).toEqual({ accepted: true });
+    expect(sends).toHaveLength(1);
+    expect(sends[0].token).toBe('secret-token-device-1');
+    expect(sends[0].data).toEqual({
+      recipientUid: 'alice',
+      notificationId: expect.stringMatching(/^test-[0-9a-f-]{36}$/),
+    });
+    expect(sends[0].webpush.notification.body).toContain('проверочное уведомление');
+    expect(sends[0].webpush.headers).toEqual({ TTL: '60', Urgency: 'high' });
+    expect(JSON.stringify(sends[0])).not.toContain('PRIVATE');
+    // Diagnostic sends do not consume, alter, or fabricate normal reminder records.
+    expect(await pending()).toMatchObject({ state: 'pending', attempts: 0 });
+  });
+  it('rejects another user or missing device without contacting the provider', async () => {
+    const fetcher = transport(() => Response.json({ name: 'messages/accepted' }));
+    await expect(sendTestPush(env, 'bob', 'device-1', 'kk')).rejects.toMatchObject({
+      status: 409,
+      code: 'PUSH_NOT_REGISTERED',
+    });
+    await expect(sendTestPush(env, 'alice', 'missing', 'kk')).rejects.toMatchObject({
+      code: 'PUSH_NOT_REGISTERED',
+    });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it('allows an explicitly requested localized test during quiet hours or opt-out', async () => {
+    await env.DB.prepare('UPDATE users SET settings_json=? WHERE uid=?')
+      .bind(
+        JSON.stringify({
+          ...DEFAULT_SETTINGS,
+          notificationsEnabled: false,
+          quietStart: '00:00',
+          quietEnd: '23:59',
+        }),
+        'alice',
+      )
+      .run();
+    expect(await sendTestPush(env, 'alice', 'device-1', 'kk')).toEqual({ accepted: true });
+    expect(sends[0].webpush.notification.body).toContain('тексеру хабарламасы');
+  });
+  it('reports missing server configuration without sending or claiming delivery', async () => {
+    await expect(
+      sendTestPush({ ...env, FIREBASE_PRIVATE_KEY: undefined }, 'alice', 'device-1', 'kk'),
+    ).rejects.toMatchObject({ status: 503, code: 'PUSH_SETUP' });
+    expect(sends).toHaveLength(0);
+  });
+  it.each([null, { error: { details: 'malformed' } }, { error: { code: 503 } }])(
+    'handles provider rejection without leaking its response (%j)',
+    async (body) => {
+      transport(() => Response.json(body, { status: 503 }));
+      await expect(sendTestPush(env, 'alice', 'device-1', 'kk')).rejects.toMatchObject({
+        status: 503,
+        code: 'PUSH_DELIVERY_FAILED',
+      });
+      expect(
+        await env.DB.prepare('SELECT token FROM push_tokens WHERE device_id=?')
+          .bind('device-1')
+          .first(),
+      ).not.toBeNull();
+    },
+  );
+  it('reports OAuth and network errors as a safe delivery failure', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('sensitive upstream details')));
+    await expect(sendTestPush(env, 'alice', 'device-1', 'kk')).rejects.toMatchObject({
+      status: 503,
+      code: 'PUSH_DELIVERY_FAILED',
+      message: 'The push provider could not accept the test.',
+    });
+    expect(sends).toHaveLength(0);
+  });
+  it('removes only the rejected device token when it is unregistered', async () => {
+    await addDevice('device-2');
+    transport(() =>
+      Response.json({ error: { details: [{ errorCode: 'UNREGISTERED' }] } }, { status: 404 }),
+    );
+    await expect(sendTestPush(env, 'alice', 'device-1', 'kk')).rejects.toMatchObject({
+      status: 409,
+      code: 'PUSH_NOT_REGISTERED',
+    });
+    const remaining = await env.DB.prepare('SELECT device_id FROM push_tokens').all();
+    expect(remaining.results).toEqual([{ device_id: 'device-2' }]);
+  });
+  it('preserves a replacement token registered while an old token is being rejected', async () => {
+    transport(async () => {
+      await env.DB.prepare('UPDATE push_tokens SET token=? WHERE user_id=? AND device_id=?')
+        .bind('new-current-token', 'alice', 'device-1')
+        .run();
+      return Response.json(
+        { error: { details: [{ errorCode: 'UNREGISTERED' }] } },
+        { status: 404 },
+      );
+    });
+    await expect(sendTestPush(env, 'alice', 'device-1', 'kk')).rejects.toMatchObject({
+      code: 'PUSH_NOT_REGISTERED',
+    });
+    expect(
+      await env.DB.prepare('SELECT token FROM push_tokens WHERE user_id=? AND device_id=?')
+        .bind('alice', 'device-1')
+        .first(),
+    ).toEqual({ token: 'new-current-token' });
   });
 });
 

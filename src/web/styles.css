@@ -1065,6 +1065,22 @@ a {
 .password-control {
   position: relative;
 }
+.push-device-status {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--surface2);
+}
+.push-device-status svg {
+  color: var(--blue);
+}
+.push-device-status p {
+  margin-top: 3px;
+  font-size: 13px;
+  color: var(--muted);
+}
 .password-control input {
   padding-right: 54px;
 }

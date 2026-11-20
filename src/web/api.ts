@@ -90,7 +90,11 @@ export function readableError(error: unknown, locale: Locale): string {
       : ((error as { code?: string })?.code ?? (error instanceof Error ? error.message : ''));
   if (code === 'PUSH_UNSUPPORTED') return t.unsupportedNotifications;
   if (code === 'PUSH_SETUP') return t.notificationSetup;
-  if (code === 'PUSH_DENIED') return t.blockedNotifications;
+  if (code === 'PUSH_INSTALL_REQUIRED') return t.pushInstallHelp;
+  if (code === 'PUSH_NOT_REGISTERED') return t.pushNotRegistered;
+  if (code === 'PUSH_DELIVERY_FAILED') return t.pushDeliveryFailed;
+  if (code === 'PUSH_STORAGE') return t.pushStorageFailed;
+  if (code === 'PUSH_DENIED') return t.pushDeniedHelp;
   if (code === 'PUSH_TIMEOUT')
     return locale === 'kk'
       ? 'Хабарландыруларды қосу ұзаққа созылды. Интернетті тексеріп, қайта көр.'

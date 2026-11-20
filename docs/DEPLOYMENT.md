@@ -29,6 +29,10 @@ Official guidance: [password authentication and policy](https://firebase.google.
 
 The Worker exchanges the private key for short-lived OAuth tokens and sends generic lock-screen notifications. No plan titles, prayer activity, savings amounts or location are included. Users explicitly enable notifications; the service worker checks the recipient against the current account.
 
+For an iPhone delivery check, open the installed Home Screen app on iOS 16.4 or newer, then Profile → Settings → Notifications. Enable or reconnect this device and send a test push. The test targets this device only, including during quiet hours. Check iOS Settings → Notifications → DayPact, lock-screen/banner permissions, and Focus settings if the provider accepts the test but no banner appears. Production acceptance and physical-device display must be recorded separately. See [Apple's Home Screen Web Push guidance](https://webkit.org/blog/13878/web-push-for-web-apps-on-ios-and-ipados/).
+
+The client checks the real browser subscription instead of trusting its local registration marker. With existing permission and a matching account marker, it refreshes the provider token and server registration on opening/resuming the app (successful refreshes are limited to once per 15 minutes within that session). It never prompts for notification permission in the background. Recipient-context storage must succeed before registration reports success; logout, privacy lock and deletion invalidate outstanding registration work.
+
 Official references: [FCM HTTP v1](https://firebase.google.com/docs/cloud-messaging/send/v1-api), [FCM IAM roles](https://firebase.google.com/docs/projects/iam/roles-predefined-product#fcm).
 
 ## 3. Cloudflare database and app

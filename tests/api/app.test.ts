@@ -8,12 +8,16 @@ import { HttpError } from '../../src/api/types';
 import { enqueueDueReminders } from '../../src/api/domain/reminders';
 import { DEFAULT_SETTINGS, type Plan, type PlanInput } from '../../src/shared/contracts';
 import { localParts, addDays } from '../../src/api/domain/dates';
+import { sendTestPush } from '../../src/api/notifications';
 
 vi.mock('../../src/api/auth', () => ({
   authenticate: async () => {
     throw new Error('Real authenticator must not be used by route tests');
   },
   deleteFirebaseAccount: vi.fn(async () => undefined),
+}));
+vi.mock('../../src/api/notifications', () => ({
+  sendTestPush: vi.fn(async () => ({ accepted: true })),
 }));
 let mf: Miniflare, env: Env;
 const app = createApi(async (request) => {
@@ -124,6 +128,7 @@ beforeAll(async () => {
 }, 30000);
 beforeEach(async () => {
   vi.mocked(deleteFirebaseAccount).mockReset().mockResolvedValue(undefined);
+  vi.mocked(sendTestPush).mockReset().mockResolvedValue({ accepted: true });
   await env.DB.batch(
     ['DELETE FROM users', 'DELETE FROM deleted_accounts', 'DELETE FROM rate_limits'].map((sql) =>
       env.DB.prepare(sql),
@@ -132,6 +137,62 @@ beforeEach(async () => {
 });
 afterAll(async () => {
   await mf?.dispose();
+});
+
+describe('current-device push test route', () => {
+  const deviceId = '9c7645b4-dcd2-4bac-9648-04a6881c9e62';
+  it('requires authentication and rejects recipient/token overrides', async () => {
+    expect((await call(null, '/push/test', 'POST', { deviceId })).status).toBe(401);
+    for (const body of [
+      {},
+      { deviceId: 'not-a-uuid' },
+      { deviceId, uid: 'bob' },
+      { deviceId, token: 'arbitrary-push-token' },
+    ]) {
+      expect((await call('alice', '/push/test', 'POST', body)).status).toBe(400);
+    }
+    expect(sendTestPush).not.toHaveBeenCalled();
+  });
+  it('uses server-authenticated identity and saved language', async () => {
+    await json('alice', '/settings', 'PATCH', { locale: 'ru' });
+    const result = await json('alice', '/push/test', 'POST', { deviceId });
+    expect(result).toEqual({ status: 200, data: { accepted: true } });
+    expect(sendTestPush).toHaveBeenCalledWith(env, 'alice', deviceId, 'ru');
+  });
+  it("limits all of a user's devices to three attempts per five-minute window", async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1795132800000);
+    try {
+      for (let i = 0; i < 3; i++) {
+        expect(
+          (await call('alice', '/push/test', 'POST', { deviceId: crypto.randomUUID() })).status,
+        ).toBe(200);
+      }
+      const fourth = await json('alice', '/push/test', 'POST', { deviceId });
+      expect(fourth.status).toBe(429);
+      expect(fourth.data.error.code).toBe('RATE_LIMITED');
+      expect(sendTestPush).toHaveBeenCalledTimes(3);
+      expect((await call('bob', '/push/test', 'POST', { deviceId })).status).toBe(200);
+      clock.mockReturnValue(1795132800000 + 300000);
+      expect((await call('alice', '/push/test', 'POST', { deviceId })).status).toBe(200);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+  it('returns safe device and provider failures instead of success', async () => {
+    vi.mocked(sendTestPush).mockRejectedValueOnce(
+      new HttpError(409, 'PUSH_NOT_REGISTERED', 'Enable notifications on this device first.'),
+    );
+    const missing = await json('alice', '/push/test', 'POST', { deviceId });
+    expect(missing.status).toBe(409);
+    expect(missing.data.error.code).toBe('PUSH_NOT_REGISTERED');
+    vi.mocked(sendTestPush).mockRejectedValueOnce(
+      new HttpError(503, 'PUSH_DELIVERY_FAILED', 'The push provider could not accept the test.'),
+    );
+    const failed = await json('alice', '/push/test', 'POST', { deviceId });
+    expect(failed.status).toBe(503);
+    expect(failed.data.error.code).toBe('PUSH_DELIVERY_FAILED');
+    expect(failed.data.accepted).toBeUndefined();
+  });
 });
 
 describe('meeting coordination', () => {

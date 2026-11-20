@@ -38,11 +38,37 @@ export function initializeAuth(): Promise<Auth | null> {
   return initialization;
 }
 export const currentAuth = () => auth;
-export async function registerPush(): Promise<string> {
+export function pushAvailability(): 'available' | 'install' | 'unsupported' | 'blocked' {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return 'unsupported';
+  const ios =
+    /iPad|iPhone|iPod/.test(navigator.userAgent ?? '') ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const standalone =
+    (navigator as Navigator & { standalone?: boolean }).standalone === true ||
+    window.matchMedia?.('(display-mode: standalone)').matches ||
+    window.matchMedia?.('(display-mode: fullscreen)').matches;
+  if (ios && !standalone) return 'install';
+  if (
+    window.isSecureContext === false ||
+    !('serviceWorker' in navigator) ||
+    !('Notification' in window) ||
+    !('PushManager' in window)
+  )
+    return 'unsupported';
+  return Notification.permission === 'denied' ? 'blocked' : 'available';
+}
+export async function registerPush(options: { requestPermission?: boolean } = {}): Promise<string> {
   if (!app || !import.meta.env.VITE_FIREBASE_VAPID_KEY) throw new Error('PUSH_SETUP');
-  if (!('serviceWorker' in navigator) || !('Notification' in window))
-    throw new Error('PUSH_UNSUPPORTED');
-  const permission = await Notification.requestPermission();
+  const availability = pushAvailability();
+  if (availability === 'install') throw new Error('PUSH_INSTALL_REQUIRED');
+  if (availability === 'unsupported') throw new Error('PUSH_UNSUPPORTED');
+  if (availability === 'blocked') throw new Error('PUSH_DENIED');
+  // Never prompt during a background refresh. A new permission prompt must run
+  // directly from the user's tap, before any asynchronous SDK/platform work.
+  const permission =
+    Notification.permission === 'granted' || options.requestPermission === false
+      ? Notification.permission
+      : await Notification.requestPermission();
   if (permission !== 'granted') throw new Error('PUSH_DENIED');
   // Give the user as long as needed to answer the browser permission prompt. The
   // deadline covers only subsequent platform/SDK work, which can otherwise hang.
@@ -67,11 +93,13 @@ export async function registerPush(): Promise<string> {
     if (!supported) throw new Error('PUSH_UNSUPPORTED');
     const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
     requirePending();
-    await navigator.serviceWorker.ready;
+    const activeRegistration = await navigator.serviceWorker.ready;
     requirePending();
+    if (activeRegistration.scope !== registration.scope || !activeRegistration.active)
+      throw new Error('PUSH_SETUP');
     const token = await getToken(getMessaging(app!), {
       vapidKey: import.meta.env.VITE_FIREBASE_VAPID_KEY,
-      serviceWorkerRegistration: registration,
+      serviceWorkerRegistration: activeRegistration,
     });
     requirePending();
     if (!token) throw new Error('PUSH_SETUP');
@@ -125,7 +153,7 @@ export function deviceId(): string {
   }
   return id;
 }
-export function isPushRegistered(uid: string): boolean {
+export function hasPushRegistration(uid: string): boolean {
   try {
     return (
       'Notification' in window &&
@@ -134,6 +162,34 @@ export function isPushRegistered(uid: string): boolean {
     );
   } catch {
     return false;
+  }
+}
+export async function isPushRegistered(uid: string): Promise<boolean> {
+  if (!hasPushRegistration(uid) || !('serviceWorker' in navigator)) return false;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let expired = false;
+  const deadline = new Promise<false>((resolve) => {
+    timeout = setTimeout(() => {
+      expired = true;
+      resolve(false);
+    }, 5000);
+  });
+  const check = async () => {
+    const registration = await navigator.serviceWorker.getRegistration('/');
+    if (expired || !registration?.active || !registration.pushManager) return false;
+    const subscription = await registration.pushManager.getSubscription();
+    return (
+      hasPushRegistration(uid) &&
+      !!subscription?.endpoint &&
+      (subscription.expirationTime === null || subscription.expirationTime > Date.now())
+    );
+  };
+  try {
+    return await Promise.race([check(), deadline]);
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 export function markPushRegistration(uid: string | null): void {
@@ -145,33 +201,71 @@ export function markPushRegistration(uid: string | null): void {
   }
 }
 let pushContextRevision = 0;
-export async function setActivePushUser(uid: string | null): Promise<void> {
+export async function setActivePushUser(uid: string | null, required = false): Promise<void> {
   const revision = ++pushContextRevision;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let expired = false;
+  let connection: IDBDatabase | undefined;
+  let transaction: IDBTransaction | undefined;
   try {
     await new Promise<void>((resolve, reject) => {
+      timeout = setTimeout(() => {
+        expired = true;
+        try {
+          transaction?.abort();
+        } catch {
+          /* The transaction may have already completed. */
+        }
+        connection?.close();
+        reject(new Error('PUSH_STORAGE'));
+      }, 5000);
       const request = indexedDB.open('daypact-push-context', 1);
       request.onupgradeneeded = () => request.result.createObjectStore('state');
       request.onerror = () => reject(request.error);
       request.onsuccess = () => {
         const db = request.result;
-        if (revision !== pushContextRevision || (uid !== null && auth?.currentUser?.uid !== uid)) {
+        connection = db;
+        if (
+          expired ||
+          revision !== pushContextRevision ||
+          (uid !== null && auth?.currentUser?.uid !== uid)
+        ) {
           db.close();
-          resolve();
+          reject(new Error('PUSH_STORAGE'));
           return;
         }
-        const tx = db.transaction('state', 'readwrite');
-        tx.objectStore('state').put(uid, 'activeUid');
-        tx.oncomplete = () => {
+        try {
+          const tx = db.transaction('state', 'readwrite');
+          transaction = tx;
+          tx.objectStore('state').put(uid, 'activeUid');
+          tx.oncomplete = () => {
+            db.close();
+            if (
+              expired ||
+              revision !== pushContextRevision ||
+              (uid !== null && auth?.currentUser?.uid !== uid)
+            )
+              reject(new Error('PUSH_STORAGE'));
+            else resolve();
+          };
+          tx.onerror = () => {
+            db.close();
+            reject(tx.error);
+          };
+          tx.onabort = () => {
+            db.close();
+            reject(new Error('PUSH_STORAGE'));
+          };
+        } catch {
           db.close();
-          resolve();
-        };
-        tx.onerror = () => {
-          db.close();
-          reject(tx.error);
-        };
+          reject(new Error('PUSH_STORAGE'));
+        }
       };
     });
   } catch {
     /* Worker reads this same store and fails closed if unavailable. */
+    if (required) throw new Error('PUSH_STORAGE');
+  } finally {
+    clearTimeout(timeout);
   }
 }

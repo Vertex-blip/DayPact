@@ -112,6 +112,9 @@ Threshold notification receipts permit one alert per occurrence; travel alerts p
 | `POST /api/notifications/read` | `{ids:string[]}`; at most 100 | `{ok:true}`                                     |
 | `POST /api/push/tokens`        | `{token,deviceId}`            | `{ok:true}`                                     |
 | `DELETE /api/push/tokens`      | `{deviceId}`                  | `{ok:true}`                                     |
+| `POST /api/push/test`          | `{deviceId}`                  | `{accepted:true}` after provider acceptance     |
+
+The test-push endpoint sends only to the authenticated user's matching registered device, uses the saved language, and permits three attempts per five-minute window per user. An explicitly requested test bypasses quiet hours and reminder preferences. It never broadcasts or includes plan details. `accepted` means FCM accepted the request, not that the phone displayed it. Errors include `PUSH_NOT_REGISTERED` (409), `PUSH_SETUP` or `PUSH_DELIVERY_FAILED` (503), and `RATE_LIMITED` (429).
 
 Device IDs are UUIDs. At most three devices can register per account; an existing device can update its token. The same token cannot be silently transferred between accounts. Registration/deletion are scoped to the caller.
 

@@ -70,6 +70,8 @@ import {
 } from './domain/coordination';
 import { queueMeetingThreshold, queueMeetingTravel } from './domain/meeting-notifications';
 import { coordinationExport } from './domain/coordinationExport';
+import { sendTestPush } from './notifications';
+import { rateLimit } from './security';
 
 type Bindings = { Bindings: Env; Variables: { identity: Identity; user: UserRow } };
 const ok = { ok: true } as const;
@@ -801,6 +803,15 @@ export function createApi(verify: Authenticator = defaultAuthenticate) {
       .bind(ownsIdentity(c), deviceId)
       .run();
     return c.json(ok);
+  });
+  app.post('/push/test', async (c) => {
+    const { deviceId } = z
+      .object({ deviceId: idSchema })
+      .strict()
+      .parse(await c.req.json());
+    const uid = ownsIdentity(c);
+    await rateLimit(c.env, `push-test:${uid}`, 3, 300);
+    return c.json(await sendTestPush(c.env, uid, deviceId, settingsOf(c.get('user')).locale));
   });
   app.get('/export/coordination', async (c) =>
     c.json(await coordinationExport(c.env.DB, ownsIdentity(c), c.req.query())),

@@ -1,20 +1,23 @@
 import { useState, type FormEvent } from 'react';
-import { Bell, Check, Download, LogOut, Shield, Trash2 } from 'lucide-react';
+import { Bell, Check, Download, LogOut, RefreshCw, Send, Shield, Trash2 } from 'lucide-react';
 import type { Locale, Profile, Settings as SettingsData } from '../shared/contracts';
 import { texts } from './i18n';
 import { Modal, PageHeader, Row, Toggle } from './components';
 import { PasswordInput } from './PasswordInput';
+import { pushAvailability } from './firebase';
 
 interface Props {
   profile: Profile;
   locale: Locale;
   busy: boolean;
   pushReady: boolean;
+  pushChecking: boolean;
   onBack: () => void;
   onSettings: (settings: Partial<SettingsData>) => Promise<void>;
   onEditProfile: () => void;
   onOfflineMaps: () => void;
   onPush: () => Promise<void>;
+  onTestPush: () => Promise<void>;
   onExport: () => Promise<void>;
   onDelete: (password: string) => Promise<void>;
   onLogout: () => void;
@@ -25,19 +28,25 @@ export function SettingsScreen({
   locale,
   busy,
   pushReady,
+  pushChecking,
   onBack,
   onSettings,
   onEditProfile,
   onOfflineMaps,
   onPush,
+  onTestPush,
   onExport,
   onDelete,
   onLogout,
   onInfo,
 }: Props) {
   const t = texts(locale);
-  const [sheet, setSheet] = useState<'language' | 'theme' | 'quiet' | 'delete' | null>(null);
+  const [sheet, setSheet] = useState<'language' | 'theme' | 'quiet' | 'delete' | 'push' | null>(
+    null,
+  );
   const s = profile.settings;
+  const availability = pushAvailability();
+  const pushBusy = busy || pushChecking;
   async function quiet(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const data = new FormData(e.currentTarget);
@@ -66,8 +75,14 @@ export function SettingsScreen({
         />
         <Row
           label={t.notifications}
-          value={s.notificationsEnabled && pushReady ? t.notificationsOn : t.notificationsOff}
-          onClick={() => void onPush()}
+          value={
+            pushChecking
+              ? t.pushChecking
+              : s.notificationsEnabled && pushReady
+                ? t.notificationsOn
+                : t.notificationsOff
+          }
+          onClick={() => setSheet('push')}
         />
         <Row
           label={t.offlineMaps}
@@ -77,7 +92,7 @@ export function SettingsScreen({
         <Row label={t.theme} value={t[s.theme]} onClick={() => setSheet('theme')} />
       </div>
       {!pushReady && (
-        <button className="text-button full" disabled={busy} onClick={() => void onPush()}>
+        <button className="text-button full" onClick={() => setSheet('push')}>
           <Bell size={17} />
           {t.enableNotifications}
         </button>
@@ -88,7 +103,7 @@ export function SettingsScreen({
           <Toggle
             label={t.plansReminders}
             checked={s.notificationsEnabled && pushReady}
-            disabled={busy}
+            disabled={pushBusy}
             onChange={(v) => {
               if (v && !pushReady) void onPush();
               else void onSettings({ notificationsEnabled: v });
@@ -119,6 +134,51 @@ export function SettingsScreen({
         <Row label={t.deleteAccount} icon={Trash2} danger onClick={() => setSheet('delete')} />
       </div>
       <p className="version">DayPact · 1.0</p>
+      {sheet === 'push' && (
+        <Modal title={t.notifications} closeLabel={t.close} onClose={() => setSheet(null)}>
+          <div className="form-stack push-settings">
+            <div className="push-device-status" role="status">
+              {pushChecking ? <RefreshCw size={22} className="spin" /> : <Bell size={22} />}
+              <div>
+                <strong>{t.pushThisDevice}</strong>
+                <p>
+                  {pushChecking
+                    ? t.pushChecking
+                    : availability === 'blocked'
+                      ? t.pushBlocked
+                      : pushReady
+                        ? t.pushDeviceReady
+                        : t.pushDeviceDisconnected}
+                </p>
+              </div>
+            </div>
+            {availability === 'install' && <p className="form-note">{t.pushInstallHelp}</p>}
+            {availability === 'unsupported' && (
+              <p className="form-note">{t.unsupportedNotifications}</p>
+            )}
+            {availability === 'blocked' && <p className="form-note">{t.pushDeniedHelp}</p>}
+            <button
+              className="primary full"
+              disabled={pushBusy || availability !== 'available'}
+              onClick={() => void onPush()}
+            >
+              <RefreshCw size={18} />
+              {pushChecking ? t.pushChecking : pushReady ? t.pushReconnect : t.enableNotifications}
+            </button>
+            <button
+              className="secondary full"
+              disabled={pushBusy || !pushReady || availability !== 'available'}
+              onClick={() => void onTestPush()}
+            >
+              <Send size={18} />
+              {t.pushSendTest}
+            </button>
+            <p className="form-note">{t.pushTestNote}</p>
+            <p className="form-note">{t.pushSystemHelp}</p>
+            <p className="form-note">{t.pushTimingNote}</p>
+          </div>
+        </Modal>
+      )}
       {sheet === 'language' && (
         <Modal title={t.appLanguage} closeLabel={t.close} onClose={() => setSheet(null)}>
           {(['kk', 'ru'] as const).map((lang) => (

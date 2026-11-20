@@ -62,6 +62,7 @@ import {
   unregisterPush,
   setActivePushUser,
   isPushRegistered,
+  hasPushRegistration,
   markPushRegistration,
 } from './firebase';
 import {
@@ -176,6 +177,17 @@ export default function App() {
   const [mapStartTab, setMapStartTab] = useState<'plans' | 'saved'>('plans');
   const [sessionPaused, setSessionPaused] = useState(false);
   const [pushReady, setPushReady] = useState(false);
+  const [pushChecking, setPushChecking] = useState(false);
+  const [pushRefreshEpoch, setPushRefreshEpoch] = useState(0);
+  const pushOperation = useRef(false);
+  const pushRevision = useRef(0);
+  const pendingPushCheck = useRef<(() => void) | null>(null);
+  const releasePushOperation = useCallback(() => {
+    pushOperation.current = false;
+    const pending = pendingPushCheck.current;
+    pendingPushCheck.current = null;
+    pending?.();
+  }, []);
   const [pendingDrafts, setPendingDrafts] = useState<PendingPlan[]>([]);
   const requestSequence = useRef(0);
   const prevUid = useRef<string | null>(null);
@@ -190,6 +202,100 @@ export default function App() {
       /* storage disabled */
     }
   }, []);
+  const syncPushDevice = useCallback(
+    async (interactive: boolean, stillCurrent: () => boolean) => {
+      const uid = user?.uid;
+      const check = () => {
+        if (!uid || !stillCurrent() || currentAuth()?.currentUser?.uid !== uid)
+          throw new ApiError('UNAUTHENTICATED', 401);
+      };
+      check();
+      let token = await registerPush({ requestPermission: interactive });
+      check();
+      await setActivePushUser(uid!, true);
+      check();
+      try {
+        await unscopedWriteApi('/push/tokens', 'POST', { token, deviceId: deviceId() }, uid!);
+      } catch (error) {
+        // Only an explicit reconnect may replace a token associated with a previous account.
+        if (!interactive || !(error instanceof ApiError) || error.code !== 'TOKEN_CONFLICT')
+          throw error;
+        check();
+        await unregisterPush();
+        check();
+        token = await registerPush({ requestPermission: false });
+        check();
+        await unscopedWriteApi('/push/tokens', 'POST', { token, deviceId: deviceId() }, uid!);
+      }
+      check();
+      markPushRegistration(uid!);
+    },
+    [user],
+  );
+  useEffect(() => {
+    const uid = user?.uid;
+    if (!uid || !user.emailVerified || profile?.uid !== uid || sessionPaused || deletionPending) {
+      setPushReady(false);
+      return;
+    }
+    let disposed = false;
+    let lastRefresh = 0;
+    const revision = pushRevision.current;
+    const current = () =>
+      !disposed && revision === pushRevision.current && currentAuth()?.currentUser?.uid === uid;
+    const check = async () => {
+      if (!current() || document.hidden) return;
+      if (pushOperation.current) {
+        pendingPushCheck.current = resume;
+        return;
+      }
+      pushOperation.current = true;
+      setPushChecking(true);
+      try {
+        const registered = await isPushRegistered(uid);
+        if (!current()) return;
+        setPushReady(registered);
+        if (
+          !navigator.onLine ||
+          !profile.settings.notificationsEnabled ||
+          !hasPushRegistration(uid)
+        )
+          return;
+        if (Date.now() - lastRefresh < 15 * 60_000) return;
+        await syncPushDevice(false, current);
+        if (current()) {
+          lastRefresh = Date.now();
+          setPushReady(true);
+        }
+      } catch {
+        if (current()) setPushReady(false);
+      } finally {
+        setPushChecking(false);
+        releasePushOperation();
+      }
+    };
+    const resume = () => {
+      void check();
+    };
+    void check();
+    document.addEventListener('visibilitychange', resume);
+    window.addEventListener('online', resume);
+    return () => {
+      disposed = true;
+      if (pendingPushCheck.current === resume) pendingPushCheck.current = null;
+      document.removeEventListener('visibilitychange', resume);
+      window.removeEventListener('online', resume);
+    };
+  }, [
+    user,
+    profile?.uid,
+    profile?.settings.notificationsEnabled,
+    sessionPaused,
+    deletionPending,
+    syncPushDevice,
+    releasePushOperation,
+    pushRefreshEpoch,
+  ]);
   useEffect(() => {
     document.documentElement.lang = locale;
   }, [locale]);
@@ -249,7 +355,10 @@ export default function App() {
             setTab('home');
             requestSequence.current++;
           }
-          setPushReady(!!next && isPushRegistered(next.uid));
+          if (old !== next?.uid) {
+            pushRevision.current++;
+            setPushReady(false);
+          }
           setUser(next);
           setAuthReady(true);
         });
@@ -282,6 +391,8 @@ export default function App() {
   }, [toast]);
 
   function hidePrivateView() {
+    pushRevision.current++;
+    setPushReady(false);
     void setActivePushUser(null);
     setProfile(null);
     setPlans([]);
@@ -384,6 +495,8 @@ export default function App() {
           ([401, 403, 410].includes(err.status) ||
             ['ACCOUNT_DELETED', 'AUTH_DELETE_PENDING'].includes(err.code))
         ) {
+          pushRevision.current++;
+          setPushReady(false);
           await setActivePushUser(null);
           const deleted =
             err.status === 410 || ['ACCOUNT_DELETED', 'AUTH_DELETE_PENDING'].includes(err.code);
@@ -646,37 +759,63 @@ export default function App() {
     });
   }
   async function enablePush() {
-    await action(async () => {
-      if (!requireOnline()) return;
-      let token = await registerPush();
-      assertCurrentUser();
-      if (!user) return;
-      await setActivePushUser(user.uid);
-      assertCurrentUser();
-      try {
-        await writeApi('/push/tokens', 'POST', { token, deviceId: deviceId() });
-      } catch (error) {
-        if (!(error instanceof ApiError) || error.code !== 'TOKEN_CONFLICT') throw error;
+    if (pushOperation.current) return;
+    pushOperation.current = true;
+    try {
+      await action(async () => {
+        if (!requireOnline()) return;
+        if (!user) return;
+        const revision = pushRevision.current;
+        await syncPushDevice(true, () => revision === pushRevision.current);
+        const result = await writeApi<{ settings: SettingsData }>('/settings', 'PATCH', {
+          notificationsEnabled: true,
+        });
+        if (revision !== pushRevision.current) return;
         assertCurrentUser();
-        await unregisterPush();
-        assertCurrentUser();
-        token = await registerPush();
-        assertCurrentUser();
-        await writeApi('/push/tokens', 'POST', { token, deviceId: deviceId() });
-      }
-      const result = await writeApi<{ settings: SettingsData }>('/settings', 'PATCH', {
-        notificationsEnabled: true,
+        setProfile((current) =>
+          current?.uid === user.uid ? { ...current, settings: result.settings } : current,
+        );
+        setPushReady(true);
+        setPushRefreshEpoch((value) => value + 1);
+        notify(t.installedPush);
       });
-      if (profile) setProfile({ ...profile, settings: result.settings });
-      markPushRegistration(user.uid);
-      setPushReady(true);
-      notify(t.installedPush);
-    });
+    } finally {
+      releasePushOperation();
+    }
+  }
+  async function testPush() {
+    if (pushOperation.current) return;
+    pushOperation.current = true;
+    try {
+      await action(async () => {
+        if (!requireOnline()) return;
+        const revision = pushRevision.current;
+        try {
+          await syncPushDevice(false, () => revision === pushRevision.current);
+          await writeApi('/push/test', 'POST', { deviceId: deviceId() });
+          if (revision !== pushRevision.current) return;
+          assertCurrentUser();
+          setPushReady(true);
+          notify(t.pushTestAccepted);
+        } catch (error) {
+          if (
+            revision === pushRevision.current &&
+            currentAuth()?.currentUser?.uid === user?.uid &&
+            (!(error instanceof ApiError) || error.code === 'PUSH_NOT_REGISTERED')
+          )
+            setPushReady(false);
+          throw error;
+        }
+      });
+    } finally {
+      releasePushOperation();
+    }
   }
   async function logout() {
     await action(async () => {
       const uid = user?.uid;
       if (!auth || !uid) return;
+      pushRevision.current++;
       markPushRegistration(null);
       setPushReady(false);
       const privateCleanup = clearPrivateData(uid).catch(() => {});
@@ -721,6 +860,8 @@ export default function App() {
       assertCurrentUser();
       await user.getIdToken(true);
       assertCurrentUser();
+      pushRevision.current++;
+      setPushReady(false);
       await setActivePushUser(null);
       assertCurrentUser();
       try {
@@ -1044,6 +1185,7 @@ export default function App() {
           profile={profile}
           locale={locale}
           busy={busy}
+          pushChecking={pushChecking}
           pushReady={
             pushReady &&
             typeof Notification !== 'undefined' &&
@@ -1054,6 +1196,7 @@ export default function App() {
           onEditProfile={() => setSheet('edit-profile')}
           onOfflineMaps={() => setSheet('offline-maps')}
           onPush={enablePush}
+          onTestPush={testPush}
           onExport={exportData}
           onDelete={deleteAccount}
           onLogout={() => setSheet('logout')}

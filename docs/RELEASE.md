@@ -1,5 +1,12 @@
 # DayPact release verification
 
+## 20 November 2026 — push registration and device diagnostics
+
+- Device readiness checks the actual browser subscription. Consented registrations refresh on app open/resume without prompting; reconnect explicitly renews the current device registration. Strict recipient-context persistence and revision guards prevent late refresh work from undoing logout, privacy lock, or deletion. Coalesced resume checks retry after overlapping work, including a temporary network failure.
+- Settings now include localized connection state, iPhone permission/install guidance, reconnect, and an explicit test push. Tests target only the caller's current device, are limited to three per five minutes, and return provider acceptance rather than claiming phone display. Reminder quiet hours remain unchanged; explicit tests bypass them.
+- TypeScript and **170 tests across 11 files passed**, including subscription/permission/storage failures, device ownership, rate limiting, provider rejection, and refreshed-token cleanup races. The existing eight-flow local browser smoke check passed. No dependencies or migrations were added.
+- Production investigation found one registered device for the reported account and one earlier notification accepted by FCM. This does not identify which device showed it or prove iPhone display. Physical iPhone receipt must still be confirmed using the new test button.
+
 ## 20 November 2026 — coordination expansion
 
 - Added series-wide time availability polls, minimum attendance, own travel states, self-claimed supplies, recurring meetings with separate occurrence data, and equal integer-tenge expense records with own payment marks. These are recordkeeping features, not payment processing.

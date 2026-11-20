@@ -1,6 +1,6 @@
 import { importPKCS8, SignJWT } from 'jose';
-import { DEFAULT_SETTINGS, type Settings } from '../shared/contracts';
-import type { Env } from './types';
+import { DEFAULT_SETTINGS, type Locale, type Settings } from '../shared/contracts';
+import { HttpError, type Env } from './types';
 
 let access: { project: string; email: string; token: string; expires: number } | undefined;
 async function accessToken(env: Env): Promise<string> {
@@ -50,6 +50,76 @@ async function accessToken(env: Env): Promise<string> {
     expires: Date.now() + value.expires_in * 1000,
   };
   return access.token;
+}
+
+/** Explicit user-requested diagnostics target exactly one owned device. Provider
+ * acceptance does not prove that the operating system displayed the notification. */
+export async function sendTestPush(
+  env: Env,
+  uid: string,
+  deviceId: string,
+  locale: Locale,
+): Promise<{ accepted: true }> {
+  const device = await env.DB.prepare(
+    'SELECT token FROM push_tokens WHERE user_id=? AND device_id=?',
+  )
+    .bind(uid, deviceId)
+    .first<{ token: string }>();
+  if (!device)
+    throw new HttpError(409, 'PUSH_NOT_REGISTERED', 'Enable notifications on this device first.');
+  if (!env.FIREBASE_CLIENT_EMAIL || !env.FIREBASE_PRIVATE_KEY || !env.APP_ORIGIN)
+    throw new HttpError(503, 'PUSH_SETUP', 'Push delivery is not configured.');
+
+  let response: Response;
+  try {
+    const token = await accessToken(env);
+    response = await fetch(
+      `https://fcm.googleapis.com/v1/projects/${encodeURIComponent(env.FIREBASE_PROJECT_ID)}/messages:send`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(10000),
+        body: JSON.stringify({
+          message: {
+            token: device.token,
+            data: { recipientUid: uid, notificationId: `test-${crypto.randomUUID()}` },
+            webpush: {
+              headers: { TTL: '60', Urgency: 'high' },
+              notification: {
+                title: 'DayPact',
+                body:
+                  locale === 'ru'
+                    ? 'Это проверочное уведомление. Пуш на этом устройстве работает.'
+                    : 'Бұл тексеру хабарламасы. Осы құрылғыда пуш жұмыс істейді.',
+                icon: '/icons/icon-192.png',
+              },
+              fcm_options: { link: env.APP_ORIGIN },
+            },
+          },
+        }),
+      },
+    );
+  } catch {
+    throw new HttpError(
+      503,
+      'PUSH_DELIVERY_FAILED',
+      'The push provider could not accept the test.',
+    );
+  }
+  if (response.ok) return { accepted: true };
+  const body = (await response.json().catch(() => null)) as {
+    error?: { details?: Array<{ errorCode?: string }> };
+  } | null;
+  if (
+    Array.isArray(body?.error?.details) &&
+    body.error.details.some((detail) => detail?.errorCode === 'UNREGISTERED')
+  ) {
+    await env.DB.prepare('DELETE FROM push_tokens WHERE user_id=? AND device_id=? AND token=?')
+      .bind(uid, deviceId, device.token)
+      .run();
+    throw new HttpError(409, 'PUSH_NOT_REGISTERED', 'Enable notifications on this device again.');
+  }
+  throw new HttpError(503, 'PUSH_DELIVERY_FAILED', 'The push provider could not accept the test.');
 }
 
 export function isQuiet(
