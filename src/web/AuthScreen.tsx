@@ -16,6 +16,7 @@ import type { Locale } from '../shared/contracts';
 import { texts } from './i18n';
 import { readableError } from './api';
 import { Modal } from './components';
+import { PasswordInput } from './PasswordInput';
 
 interface Props {
   auth: Auth | null;
@@ -186,31 +187,28 @@ export function AuthScreen({ auth, user, locale, onLocale, onVerified }: Props) 
                 />
               </label>
               {mode !== 'reset' && (
-                <label>
-                  {t.password}
-                  <input
-                    name="password"
-                    type="password"
-                    autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
-                    required
-                    minLength={mode === 'signup' ? 12 : 1}
-                    maxLength={128}
-                  />
-                  {mode === 'signup' && <small>{t.passwordHint}</small>}
-                </label>
+                <PasswordInput
+                  key={mode}
+                  label={t.password}
+                  locale={locale}
+                  name="password"
+                  autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                  required
+                  minLength={mode === 'signup' ? 12 : 1}
+                  maxLength={128}
+                  hint={mode === 'signup' ? t.passwordHint : undefined}
+                />
               )}
               {mode === 'signup' && (
-                <label>
-                  {t.passwordAgain}
-                  <input
-                    name="repeat"
-                    type="password"
-                    autoComplete="new-password"
-                    required
-                    minLength={12}
-                    maxLength={128}
-                  />
-                </label>
+                <PasswordInput
+                  label={t.passwordAgain}
+                  locale={locale}
+                  name="repeat"
+                  autoComplete="new-password"
+                  required
+                  minLength={12}
+                  maxLength={128}
+                />
               )}
               <button className="primary full" disabled={busy}>
                 {busy

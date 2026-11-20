@@ -3,6 +3,7 @@ import { Bell, Check, Download, LogOut, Shield, Trash2 } from 'lucide-react';
 import type { Locale, Profile, Settings as SettingsData } from '../shared/contracts';
 import { texts } from './i18n';
 import { Modal, PageHeader, Row, Toggle } from './components';
+import { PasswordInput } from './PasswordInput';
 
 interface Props {
   profile: Profile;
@@ -177,10 +178,13 @@ export function SettingsScreen({
         <Modal title={t.deleteAccount} closeLabel={t.close} onClose={() => setSheet(null)}>
           <form className="form-stack" onSubmit={(e) => void remove(e)}>
             <p className="form-note">{t.deleteAccountNote}</p>
-            <label>
-              {t.currentPassword}
-              <input name="password" type="password" autoComplete="current-password" required />
-            </label>
+            <PasswordInput
+              label={t.currentPassword}
+              locale={locale}
+              name="password"
+              autoComplete="current-password"
+              required
+            />
             <button className="danger-button full" disabled={busy}>
               {busy ? t.deleting : t.deleteAccount}
             </button>

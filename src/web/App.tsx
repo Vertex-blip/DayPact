@@ -46,6 +46,7 @@ import type {
   Settings as SettingsData,
 } from '../shared/contracts';
 import { AuthScreen } from './AuthScreen';
+import { PasswordInput } from './PasswordInput';
 import {
   api as unscopedApi,
   ApiError,
@@ -940,10 +941,14 @@ export default function App() {
                   void recoverSession(String(new FormData(e.currentTarget).get('password')));
                 }}
               >
-                <label>
-                  {t.currentPassword}
-                  <input name="password" type="password" autoComplete="current-password" required />
-                </label>
+                <PasswordInput
+                  key="session-recovery"
+                  label={t.currentPassword}
+                  locale={locale}
+                  name="password"
+                  autoComplete="current-password"
+                  required
+                />
                 <p className="form-note">{t.unsyncedLogout}</p>
                 <button className="primary" disabled={busy}>
                   {t.signIn}
@@ -957,10 +962,14 @@ export default function App() {
                   void deleteAccount(String(new FormData(e.currentTarget).get('password')));
                 }}
               >
-                <label>
-                  {t.currentPassword}
-                  <input name="password" type="password" autoComplete="current-password" required />
-                </label>
+                <PasswordInput
+                  key="deletion-retry"
+                  label={t.currentPassword}
+                  locale={locale}
+                  name="password"
+                  autoComplete="current-password"
+                  required
+                />
                 <button className="danger-button" disabled={busy}>
                   {t.deleteAccount}
                 </button>
