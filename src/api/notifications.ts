@@ -160,7 +160,9 @@ export async function deliverNotifications(
   const rows = await env.DB.prepare(
     `SELECT n.id,n.user_id,n.plan_id,n.kind,n.attempts,n.next_attempt_at,n.created_at,u.settings_json
     FROM notifications n JOIN users u ON u.uid=n.user_id
-    WHERE n.state='pending' AND n.next_attempt_at<=? ORDER BY n.next_attempt_at LIMIT 3`,
+    WHERE n.state='pending' AND n.next_attempt_at<=?
+    AND NOT EXISTS(SELECT 1 FROM user_moderation m WHERE m.user_id=u.uid AND m.state<>'active')
+    ORDER BY n.next_attempt_at LIMIT 3`,
   )
     .bind(nowIso)
     .all<Pending>();
@@ -171,6 +173,7 @@ export async function deliverNotifications(
     const leaseUntil = new Date(now.getTime() + 120000).toISOString();
     const claim = await env.DB.prepare(
       `UPDATE notifications SET attempts=attempts+1,next_attempt_at=? WHERE id=? AND state='pending' AND attempts=? AND next_attempt_at<=?
+      AND NOT EXISTS(SELECT 1 FROM user_moderation m WHERE m.user_id=notifications.user_id AND m.state<>'active')
       RETURNING (SELECT settings_json FROM users WHERE uid=notifications.user_id) AS settings_json`,
     )
       .bind(leaseUntil, item.id, item.attempts, nowIso)
@@ -190,7 +193,9 @@ export async function deliverNotifications(
       continue;
     }
     const devices = await env.DB.prepare(
-      `SELECT token FROM push_tokens WHERE user_id=? ORDER BY updated_at DESC LIMIT 3`,
+      `SELECT token FROM push_tokens WHERE user_id=?
+      AND NOT EXISTS(SELECT 1 FROM user_moderation m WHERE m.user_id=push_tokens.user_id AND m.state<>'active')
+      ORDER BY updated_at DESC LIMIT 3`,
     )
       .bind(item.user_id)
       .all<{ token: string }>();

@@ -36,7 +36,8 @@ export async function enqueueDueReminders(env: Env, now: Date = new Date()): Pro
       SELECT lower(hex(randomblob(16))),u.uid,p.id,'reminder','DayPact',CASE WHEN json_extract(u.settings_json,'$.locale')='ru' THEN 'У вас есть незавершённый план.' ELSE 'Орындалмаған жоспарың бар.' END,?,?, 'reminder:'||p.id||':'||?||':'||u.uid
       FROM plans p JOIN plan_members m ON m.plan_id=p.id JOIN users u ON u.uid=m.user_id
       WHERE p.id=? AND p.next_reminder_at=? AND u.uid IN(SELECT value FROM json_each(?))
-      AND NOT EXISTS(SELECT 1 FROM checkins c WHERE c.plan_id=p.id AND c.user_id=u.uid AND c.occurrence_date=? AND c.completed=1)`,
+      AND NOT EXISTS(SELECT 1 FROM checkins c WHERE c.plan_id=p.id AND c.user_id=u.uid AND c.occurrence_date=? AND c.completed=1)
+      AND NOT EXISTS(SELECT 1 FROM user_moderation um WHERE um.user_id=u.uid AND um.state<>'active')`,
       ).bind(
         timestamp,
         timestamp,

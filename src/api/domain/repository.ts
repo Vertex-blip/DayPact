@@ -7,6 +7,7 @@ import {
   type Cadence,
 } from '../../shared/contracts';
 import { HttpError, type Env, type Identity } from '../types';
+import { assertUserActive } from '../admin/guards';
 export interface UserRow {
   uid: string;
   email: string;
@@ -60,6 +61,7 @@ export async function getUser(db: D1Database, uid: string): Promise<UserRow> {
   return row;
 }
 export async function ensureUser(env: Env, identity: Identity): Promise<UserRow> {
+  await assertUserActive(env, identity.uid);
   const deleted = await env.DB.prepare('SELECT 1 FROM deleted_accounts WHERE uid=?')
     .bind(identity.uid)
     .first();
@@ -68,6 +70,7 @@ export async function ensureUser(env: Env, identity: Identity): Promise<UserRow>
   await env.DB.prepare(
     `INSERT INTO users(uid,email,display_name,settings_json,created_at,updated_at)
     SELECT ?,?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM deleted_accounts WHERE uid=?)
+    AND NOT EXISTS(SELECT 1 FROM user_moderation WHERE user_id=? AND state<>'active')
     ON CONFLICT(uid) DO UPDATE SET email=excluded.email WHERE users.email<>excluded.email`,
   )
     .bind(
@@ -78,8 +81,10 @@ export async function ensureUser(env: Env, identity: Identity): Promise<UserRow>
       now,
       now,
       identity.uid,
+      identity.uid,
     )
     .run();
+  await assertUserActive(env, identity.uid);
   return getUser(env.DB, identity.uid);
 }
 export async function memberPlan(db: D1Database, id: string, uid: string): Promise<PlanRow> {

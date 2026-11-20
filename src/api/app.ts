@@ -1,4 +1,7 @@
 import { Hono } from 'hono';
+import { createAdminApi } from './admin';
+import { isAdminOwner } from './admin/guards';
+import { supportTicket, type SupportRow } from './domain/support';
 import { bodyLimit } from 'hono/body-limit';
 import { z, ZodError } from 'zod';
 import { authenticate as defaultAuthenticate, deleteFirebaseAccount } from './auth';
@@ -151,6 +154,51 @@ export function createApi(verify: Authenticator = defaultAuthenticate) {
   });
   app.notFound(() => errorResponse(404, 'NOT_FOUND', 'Not found', crypto.randomUUID()));
   app.get('/health', (c) => c.json({ ok: true, service: 'daypact' }));
+  app.route('/', createAdminApi());
+  app.get('/support', async (c) => {
+    const result = await c.env.DB.prepare(
+      'SELECT * FROM support_tickets WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT 50',
+    )
+      .bind(ownsIdentity(c))
+      .all<SupportRow>();
+    return c.json({ tickets: result.results.map(supportTicket) });
+  });
+  app.post('/support', async (c) => {
+    const input = z
+      .object({
+        category: z.enum(['help', 'report']),
+        subject: z.string().trim().min(1).max(120),
+        message: z.string().trim().min(1).max(2000),
+      })
+      .strict()
+      .parse(await c.req.json());
+    const uid = ownsIdentity(c);
+    await rateLimit(c.env, `support:${uid}`, 3, 86400);
+    const id = crypto.randomUUID(),
+      now = new Date().toISOString();
+    const result = await c.env.DB.prepare(
+      `INSERT INTO support_tickets(id,user_id,category,subject,message,created_at,updated_at)
+       SELECT ?,?,?,?,?,?,? WHERE (SELECT count(*) FROM support_tickets WHERE user_id=? AND status='open')<10`,
+    )
+      .bind(id, uid, input.category, input.subject, input.message, now, now, uid)
+      .run();
+    if (!result.meta.changes)
+      throw new HttpError(429, 'SUPPORT_LIMIT', 'Close existing requests before opening another.');
+    return c.json(
+      {
+        ticket: supportTicket({
+          id,
+          user_id: uid,
+          ...input,
+          status: 'open',
+          reply: '',
+          created_at: now,
+          updated_at: now,
+        }),
+      },
+      201,
+    );
+  });
   app.get('/me', (c) => c.json({ profile: profileOf(c.get('user')) }));
   app.put('/me', async (c) => {
     const input = profileSchema.parse(await c.req.json());
@@ -899,6 +947,12 @@ export function createApi(verify: Authenticator = defaultAuthenticate) {
   });
   app.delete('/me', async (c) => {
     const identity = c.get('identity');
+    if (isAdminOwner(c.env, identity.uid))
+      throw new HttpError(
+        403,
+        'ADMIN_OWNER_PROTECTED',
+        'The administrator account is protected from deletion.',
+      );
     if (Date.now() / 1000 - identity.authTime > 300)
       throw new HttpError(
         401,

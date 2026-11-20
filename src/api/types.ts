@@ -7,6 +7,10 @@ export interface Env {
   FIREBASE_CLIENT_EMAIL?: string;
   FIREBASE_PRIVATE_KEY?: string;
   TURNSTILE_SECRET?: string;
+  ADMIN_OWNER_UID?: string;
+  ADMIN_FIREBASE_CLIENT_EMAIL?: string;
+  ADMIN_FIREBASE_PRIVATE_KEY?: string;
+  ADMIN_TOTP_KEY?: string;
 }
 export interface Identity {
   uid: string;

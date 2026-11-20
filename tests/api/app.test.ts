@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { createApi } from '../../src/api/app';
 import { deleteFirebaseAccount } from '../../src/api/auth';
@@ -99,7 +99,9 @@ beforeAll(async () => {
     }),
   );
   const db = (await mf.getD1Database('DB')) as unknown as D1Database;
-  const sql = ['0001_initial.sql', '0002_meetings.sql', '0003_coordination.sql']
+  const sql = readdirSync(new URL('../../migrations/', import.meta.url))
+    .filter((name) => name.endsWith('.sql'))
+    .sort()
     .map((name) => readFileSync(new URL(`../../migrations/${name}`, import.meta.url), 'utf8'))
     .join('\n');
   // D1 exec accepts a line per statement; keep CREATE TRIGGER blocks intact.

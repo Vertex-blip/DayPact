@@ -31,10 +31,10 @@ beforeAll(async () => {
   const db = (await mf.getD1Database('DB')) as unknown as D1Database;
   let statement = '',
     trigger = false;
-  for (const line of readFileSync(
-    new URL('../../migrations/0001_initial.sql', import.meta.url),
-    'utf8',
-  ).split(/\r?\n/)) {
+  for (const line of ['0001_initial.sql', '0004_admin.sql']
+    .map((name) => readFileSync(new URL(`../../migrations/${name}`, import.meta.url), 'utf8'))
+    .join('\n')
+    .split(/\r?\n/)) {
     const clean = line.trim();
     if (!clean) continue;
     if (clean.startsWith('CREATE TRIGGER')) trigger = true;
@@ -59,6 +59,7 @@ beforeEach(async () => {
   sends = [];
   env.FIREBASE_CLIENT_EMAIL = `test-${crypto.randomUUID()}@push-test.iam.gserviceaccount.com`;
   await env.DB.prepare('DELETE FROM users').run();
+  await env.DB.prepare('DELETE FROM user_moderation').run();
   const settings = { ...DEFAULT_SETTINGS, quietStart: '00:00', quietEnd: '00:00' };
   await env.DB.prepare(
     'INSERT INTO users(uid,email,display_name,settings_json,created_at,updated_at) VALUES(?,?,?,?,?,?)',
@@ -187,6 +188,30 @@ describe('FCM delivery and privacy', () => {
     expect((await deliverNotifications(env, now)).delivered).toBe(0);
     expect((await pending())?.state).toBe('skipped');
   });
+  it.each(['suspended', 'delete_pending', 'deleted'])(
+    'cannot lease or send if account becomes %s while obtaining provider authorization',
+    async (state) => {
+      let attemptedSends = 0;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: RequestInfo | URL) => {
+          if (String(url).startsWith('https://oauth2.googleapis.com/token')) {
+            await env.DB.prepare(
+              'INSERT INTO user_moderation(user_id,state,updated_at) VALUES(?,?,?)',
+            )
+              .bind('alice', state, now.toISOString())
+              .run();
+            return Response.json({ access_token: 'test-oauth-token', expires_in: 3600 });
+          }
+          attemptedSends++;
+          return Response.json({ name: 'must-not-send' });
+        }),
+      );
+      expect((await deliverNotifications(env, now)).delivered).toBe(0);
+      expect(attemptedSends).toBe(0);
+      expect(await pending()).toMatchObject({ state: 'pending', attempts: 0 });
+    },
+  );
   it('retries transient errors with a later attempt and stable deduplication id', async () => {
     transport(() => Response.json({ error: { code: 503 } }, { status: 503 }));
     expect((await deliverNotifications(env, now)).delivered).toBe(0);

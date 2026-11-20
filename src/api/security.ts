@@ -15,7 +15,19 @@ export function applySecurity(response: Response, api = false): Response {
   );
   if (api) {
     headers.set('Cache-Control', 'private, no-store');
-    headers.set('Vary', 'Authorization, Origin');
+    headers.set(
+      'Vary',
+      [
+        ...new Set([
+          ...(headers.get('Vary') ?? '')
+            .split(',')
+            .map((v) => v.trim())
+            .filter(Boolean),
+          'Authorization',
+          'Origin',
+        ]),
+      ].join(', '),
+    );
   }
   return new Response(response.body, {
     status: response.status,

@@ -93,7 +93,7 @@ Use D1 Time Travel/exports for recovery, retaining backups securely and testing 
 ## Configured resources
 
 - App origin: `https://daypact.vertex-blip.workers.dev`.
-- Cloudflare D1: `daypact`, ID `222fd9fe-f67c-41ae-82c6-52d84f92c45e`, migrations `0001_initial.sql`, `0002_meetings.sql` and `0003_coordination.sql` applied in EEUR.
+- Cloudflare D1: `daypact`, ID `222fd9fe-f67c-41ae-82c6-52d84f92c45e`, migrations `0001_initial.sql`, `0002_meetings.sql`, `0003_coordination.sql` and `0004_admin.sql` applied in EEUR.
 - Firebase project: `daypact-8dd4b`, project number `621011622605`, Spark.
 - Web app: `1:621011622605:web:4f309d5e7cddc1ed53a784`.
 - Password policy: enforce 12–128 characters; email enumeration protection enabled; production hostname authorized.
@@ -101,3 +101,23 @@ Use D1 Time Travel/exports for recovery, retaining backups securely and testing 
 - Dedicated push sender: `daypact-push@daypact-8dd4b.iam.gserviceaccount.com`, with a custom project role containing only `cloudmessaging.messages.create`. OAuth and an FCM validation-only request were accepted. This is not proof of delivery to a physical device.
 
 Cloudflare OAuth credentials use the OS keyring. Firebase authorization uses the official Firebase connector/CLI session. Secrets and temporary operational helpers are excluded from Git. An operator must use their own authorized session for later deployment, not copy another person's browser cookies or authentication tokens.
+
+## Owner administration
+
+Apply `0004_admin.sql` before publishing the administration routes. It adds moderation, support tickets, the administrative audit log, encrypted TOTP enrollment, sessions and rolling code-attempt limits. It does not alter or erase existing users or plans.
+
+Administration uses four **Worker secrets**, never frontend environment variables:
+
+- `ADMIN_OWNER_UID`: the existing, verified owner's immutable Firebase UID. Changing a display name or email does not grant this role.
+- `ADMIN_TOTP_KEY`: a cryptographically random 32-byte AES key encoded as unpadded base64url. Keep a protected operational backup; replacing it makes existing enrollment unreadable.
+- `ADMIN_FIREBASE_CLIENT_EMAIL` and `ADMIN_FIREBASE_PRIVATE_KEY`: a dedicated service-account key used only by account management.
+
+The configured account is `daypact-accounts@daypact-8dd4b.iam.gserviceaccount.com`. Its custom role, `projects/daypact-8dd4b/roles/daypactAccountManager`, contains only `firebaseauth.users.get`, `firebaseauth.users.update` and `firebaseauth.users.delete`. It cannot retrieve password hashes, create accounts, send email or change Firebase configuration. The existing push service account remains separate. Private keys must be supplied using protected stdin or a trusted secret manager, never committed or placed in browser code.
+
+The owner opens **Profile → Admin panel** (also available in Settings), confirms the current account password, saves the displayed setup key in an authenticator, and enters its six-digit code. Setup is not complete until the code is accepted. Subsequent unlocks require the password and a fresh code; the administrative session lasts 15 minutes. Production enrollment belongs to the owner and must not be created by an automated test. Losing the authenticator does not unlock administration through ordinary password reset.
+
+Recovery requires the authorized infrastructure operator to independently verify the owner, revoke administrative sessions and reset only that UID's TOTP enrollment through a controlled database operation. Record the recovery in the operational audit. There is no public MFA-reset endpoint or email-only bypass. Do not reset enrollment merely because a code has expired; check the device clock and retry with a fresh code first.
+
+Before release, exercise suspension, restoration and permanent deletion on disposable identities. Verify that old tokens fail, private application data cascades on deletion, and registering the same email creates a different UID. Provider failures leave a visible pending action and keep access blocked until the owner retries. Protect the production owner's account from these tests.
+
+The panel displays actual application counts, current D1 size, push queue states and configuration presence. It does not claim to measure Cloudflare/Firebase daily quotas or prove delivery to a phone. Consult provider dashboards for billing/usage and request-specific diagnostics. No paid tier is required by these administration features; normal free-tier limits still apply.

@@ -22,6 +22,8 @@ interface Props {
   onDelete: (password: string) => Promise<void>;
   onLogout: () => void;
   onInfo: (kind: 'privacy' | 'help' | 'about') => void;
+  adminEligible: boolean;
+  onAdmin: () => void;
 }
 export function SettingsScreen({
   profile,
@@ -39,6 +41,8 @@ export function SettingsScreen({
   onDelete,
   onLogout,
   onInfo,
+  adminEligible,
+  onAdmin,
 }: Props) {
   const t = texts(locale);
   const [sheet, setSheet] = useState<'language' | 'theme' | 'quiet' | 'delete' | 'push' | null>(
@@ -129,9 +133,12 @@ export function SettingsScreen({
       <div className="settings-group">
         <Row label={t.about} onClick={() => onInfo('about')} />
         <Row label={t.help} onClick={() => onInfo('help')} />
+        {adminEligible && <Row label={t.adminPanel} icon={Shield} onClick={onAdmin} />}
         <Row label={t.exportData} icon={Download} onClick={() => void onExport()} />
         <Row label={t.logout} icon={LogOut} onClick={onLogout} />
-        <Row label={t.deleteAccount} icon={Trash2} danger onClick={() => setSheet('delete')} />
+        {!adminEligible && (
+          <Row label={t.deleteAccount} icon={Trash2} danger onClick={() => setSheet('delete')} />
+        )}
       </div>
       <p className="version">DayPact · 1.0</p>
       {sheet === 'push' && (

@@ -20,6 +20,62 @@ The first authenticated visit initializes the profile. Display names have at mos
 
 Deletion requires Firebase reauthentication within five minutes. The server records a tombstone and deletes application data, then deletes the Firebase account. A provider failure returns `503 AUTH_DELETE_PENDING`: application data is already removed, and the user must retry `DELETE /api/me` after fresh authentication. Other routes return `ACCOUNT_DELETED` for a tombstoned identity and cannot recreate its profile. Deletion removes plans owned by that account; other owners' plans remain. This is a two-service operation, not a distributed transaction.
 
+The configured administrator account is protected from both self-deletion and administrator suspend/delete actions. It returns `403 ADMIN_OWNER_PROTECTED` without deleting data. A suspended UID cannot use ordinary application endpoints; deleting an account never bans its email from a later registration with a new Firebase UID.
+
+## Support requests
+
+| Method and path     | Request           | Response                                                       |
+| ------------------- | ----------------- | -------------------------------------------------------------- |
+| `GET /api/support`  | None              | `{tickets:SupportTicket[]}`; latest 50 belonging to the caller |
+| `POST /api/support` | `{category:"help" | "report",subject,message}`                                     | `{ticket:SupportTicket}`; status 201 |
+
+Subjects are trimmed and contain 1–120 characters; messages contain 1–2,000 characters. The server assigns the author, UUID, initial `open` status and timestamps. Requests cannot supply another author or an administrator reply. Creation is limited to three attempts per daily rate-limit window and ten simultaneously open requests per user; the open-request bound is checked in the insertion statement.
+
+`SupportTicket` contains `id`, `userId`, `category`, `subject`, `message`, `status`, `reply`, `createdAt` and `updatedAt`. Replies are plain text with a maximum of 2,000 characters. A user sees only their own requests; the administrator can view and answer them. Requests cascade when their author is deleted. Contracts are in `src/shared/admin.ts`.
+
+## Administration
+
+Administration requires the ordinary verified Firebase bearer token and an exact match to the server's `ADMIN_OWNER_UID`. Client profile fields, email addresses, URL parameters and request bodies cannot grant this role. `GET /api/admin/access` returns `{eligible:false}` to other authenticated users; protected administrative routes return `403 ADMIN_FORBIDDEN`.
+
+### Two-step verification and sessions
+
+| Method and path                    | Request           | Response                                                                                             |
+| ---------------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------- |
+| `GET /api/admin/access`            | None              | `AdminAccess`: eligibility; for the owner, `setupRequired`, `unlocked` and `expiresAt` when unlocked |
+| `POST /api/admin/security/setup`   | `{}`              | `{secret,otpauthUri,expiresAt}` for authenticator enrollment                                         |
+| `POST /api/admin/security/confirm` | `{code:"123456"}` | `{unlocked:true,expiresAt}` and the administrative session cookie                                    |
+| `POST /api/admin/security/unlock`  | `{code:"123456"}` | `{unlocked:true,expiresAt}` and a new session cookie                                                 |
+| `POST /api/admin/security/lock`    | `{}`              | `{ok:true}`; revoke the supplied session and clear its cookie                                        |
+
+Setup, confirmation and unlock require Firebase reauthentication within five minutes. Setup creates a pending secret valid for ten minutes; it cannot replace an already enrolled secret. Enrollment is completed by the owner on their first visit, not automatically during deployment. The secret/URI must remain in memory only and must not be sent to a third-party QR service.
+
+Codes are six-digit TOTP with SHA-1, 30-second periods and a one-period clock allowance in either direction. Confirmation and unlock share a strict rolling limit of five attempts per ten minutes. A successful counter is consumed atomically, so replay and concurrent reuse fail with `ADMIN_CODE_REUSED`. Invalid codes return `ADMIN_CODE_INVALID`; missing/expired enrollment returns `ADMIN_SETUP_REQUIRED`.
+
+The additional cookie is `__Secure-daypact-admin`, with `HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/api/admin` and a 15-minute lifetime. It never replaces the bearer token. The stored session is bound to the owner's UID and Firebase `auth_time`; reauthentication changes invalidate an older session. Administrative browser requests must use same-origin credentials. All administrative mutations require `Origin` to equal the configured `APP_ORIGIN` exactly and `Content-Type: application/json`. Ordinary application requests continue to omit cookies.
+
+### Account management and operational views
+
+Every route below requires an unlocked session in addition to owner authentication.
+
+| Method and path                     | Request                         | Response                                                          |
+| ----------------------------------- | ------------------------------- | ----------------------------------------------------------------- |
+| `GET /api/admin/overview`           | None                            | `AdminOverview`                                                   |
+| `GET /api/admin/users`              | Optional `query` or `pageToken` | `AdminUsers`                                                      |
+| `POST /api/admin/users/:uid/action` | `{action:"suspend"              | "restore"                                                         | "delete",confirmEmail}` | `{ok:true}` |
+| `GET /api/admin/support`            | None                            | `{tickets:AdminSupportTicket[]}`; latest 100, open requests first |
+| `PATCH /api/admin/support/:id`      | `{status:"open"                 | "closed",reply}`                                                  | `{ok:true}`             |
+| `GET /api/admin/audit`              | None                            | `{events:AdminAudit[]}`; latest 100                               |
+
+The users endpoint reads Firebase Authentication directly and therefore includes registrations that have not verified their email or initialized an application profile. Pages contain up to 50 users; pass the returned `nextPageToken` unchanged until it is `null`. `query` is an exact email address or UID, not a name or substring search. The response contains sanitized account fields, a `protected` owner flag, `appRegistered`, moderation state and pending operations. Password hashes, salts, refresh tokens and provider credentials are excluded. See `AdminUser`, `AdminPendingAction` and the other exact types in `src/shared/admin.ts`.
+
+All account actions require the selected account's email typed into `confirmEmail`; a mismatch returns `400 ADMIN_CONFIRMATION_REQUIRED`. Account actions are limited to ten attempts per ten-minute rate-limit window. Suspension first blocks application access in D1 and clears device tokens/pending push delivery, then disables the Firebase account and revokes earlier sessions. Restoration keeps application access blocked until Firebase succeeds; the user signs in again and re-enables notifications. Permanent deletion writes a UID tombstone, cascades application data and then deletes the Firebase account. The same email may subsequently register a new account with a new UID.
+
+Account operations have a 90-second lease. Concurrent operations return `409 ADMIN_ACTION_BUSY`. Provider or finalization failure returns `503 ADMIN_ACTION_PENDING` and leaves a fail-closed pending operation visible in `pendingActions`; retry that action rather than assuming it succeeded. Once permanent deletion begins, restoration is forbidden. Repeating a completed deletion with the original email succeeds without deleting a later registration. These are resumable operations across D1 and Firebase, not a distributed transaction.
+
+`AdminOverview` exposes aggregate application profile/plan counts, profiles created in the last seven days, suspended accounts, open support requests, notification state counts, and up to 30 failed notification metadata records. It does not expose private plan titles, locations or contents. Database bytes come from D1's reported database size; the configured size indicator is not a live report of daily free-tier usage. Provider-configured booleans indicate that required worker secrets exist, not that provider delivery is guaranteed.
+
+Support updates are limited to 30 attempts per ten-minute rate-limit window. Their success audit and database change share a transaction. Audit records contain the administrator UID, optional target UID, action, outcome and timestamp; they omit email addresses, codes, secrets and support-message bodies. `ADMIN_CONFIGURATION` and `ADMIN_PROVIDER_UNAVAILABLE` return 503 when configuration or provider access is unavailable. An absent, expired or mismatched session returns `401 ADMIN_UNLOCK_REQUIRED`.
+
 ## Friends
 
 | Method and path                 | Request   | Response                        |

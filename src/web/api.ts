@@ -90,6 +90,18 @@ export function readableError(error: unknown, locale: Locale): string {
       : ((error as { code?: string })?.code ?? (error instanceof Error ? error.message : ''));
   if (code === 'PUSH_UNSUPPORTED') return t.unsupportedNotifications;
   if (code === 'PUSH_SETUP') return t.notificationSetup;
+  if (code === 'ACCOUNT_SUSPENDED' || code === 'auth/user-disabled')
+    return locale === 'kk'
+      ? 'Аккаунт уақытша бұғатталған. Қолданба әкімшісіне хабарлас.'
+      : 'Аккаунт временно заблокирован. Обратись к администратору приложения.';
+  if (code === 'ADMIN_OWNER_PROTECTED')
+    return locale === 'kk'
+      ? 'Әкімші аккаунты жоюдан қорғалған.'
+      : 'Аккаунт администратора защищён от удаления.';
+  if (code === 'SUPPORT_LIMIT')
+    return locale === 'kk'
+      ? 'Ашық өтініштер тым көп. Алдыңғы өтініштің жауабын күт.'
+      : 'Слишком много открытых обращений. Дождись ответа на предыдущее.';
   if (code === 'PUSH_INSTALL_REQUIRED') return t.pushInstallHelp;
   if (code === 'PUSH_NOT_REGISTERED') return t.pushNotRegistered;
   if (code === 'PUSH_DELIVERY_FAILED') return t.pushDeliveryFailed;

@@ -45,6 +45,7 @@ import type {
   Profile,
   Settings as SettingsData,
 } from '../shared/contracts';
+import type { AdminAccess } from '../shared/admin';
 import { AuthScreen } from './AuthScreen';
 import { PasswordInput } from './PasswordInput';
 import {
@@ -95,6 +96,12 @@ import { clearSavedPlaces } from './map/savedPlaces';
 import './styles.css';
 
 const MapScreen = lazy(() => import('./map/MapScreen').then((m) => ({ default: m.MapScreen })));
+const AdminScreen = lazy(() =>
+  import('./admin/AdminScreen').then((m) => ({ default: m.AdminScreen })),
+);
+const SupportScreen = lazy(() =>
+  import('./SupportScreen').then((m) => ({ default: m.SupportScreen })),
+);
 const OfflineMapsSettings = lazy(() =>
   import('./map/OfflineMapsSettings').then((m) => ({ default: m.OfflineMapsSettings })),
 );
@@ -148,6 +155,8 @@ export default function App() {
   const [date, setDate] = useState(() => localDate());
   const [tab, setTab] = useState<Tab>('home');
   const [settings, setSettings] = useState(false);
+  const [adminEligible, setAdminEligible] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(false);
   const [filter, setFilter] = useState<'all' | 'shared'>('all');
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -300,6 +309,36 @@ export default function App() {
     document.documentElement.lang = locale;
   }, [locale]);
   useEffect(() => {
+    const uid = user?.uid;
+    let disposed = false;
+    if (
+      !uid ||
+      !user.emailVerified ||
+      profile?.uid !== uid ||
+      !online ||
+      sessionPaused ||
+      deletionPending
+    ) {
+      setAdminEligible(false);
+      setAdminOpen(false);
+      return;
+    }
+    void unscopedApi<AdminAccess>('/admin/access', { expectedUid: uid })
+      .then((access) => {
+        if (!disposed && currentAuth()?.currentUser?.uid === uid)
+          setAdminEligible(access.eligible === true);
+      })
+      .catch(() => {
+        if (!disposed) {
+          setAdminEligible(false);
+          setAdminOpen(false);
+        }
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [user, profile?.uid, online, sessionPaused, deletionPending]);
+  useEffect(() => {
     const theme = profile?.settings.theme ?? 'dark';
     document.documentElement.dataset.theme = theme;
     document
@@ -324,6 +363,8 @@ export default function App() {
           if (next && old !== next.uid) activatePrivateSession(next.uid);
           void setActivePushUser(next?.emailVerified ? next.uid : null);
           if (old && old !== next?.uid) {
+            setAdminEligible(false);
+            setAdminOpen(false);
             void clearPrivateData(old).catch(() => {});
             void clearSavedPlaces(old).catch(() => {});
             markPushRegistration(null);
@@ -391,6 +432,8 @@ export default function App() {
   }, [toast]);
 
   function hidePrivateView() {
+    setAdminEligible(false);
+    setAdminOpen(false);
     pushRevision.current++;
     setPushReady(false);
     void setActivePushUser(null);
@@ -1131,6 +1174,39 @@ export default function App() {
       </main>
     );
 
+  if (adminOpen && adminEligible)
+    return (
+      <div className="app-shell">
+        <Suspense
+          fallback={
+            <div className="splash">
+              <LoaderCircle className="spin" />
+            </div>
+          }
+        >
+          <AdminScreen
+            key={user.uid}
+            locale={locale}
+            user={user}
+            onBack={() => setAdminOpen(false)}
+          />
+        </Suspense>
+      </div>
+    );
+  if (sheet === 'help')
+    return (
+      <div className="app-shell">
+        <Suspense
+          fallback={
+            <div className="splash">
+              <LoaderCircle className="spin" />
+            </div>
+          }
+        >
+          <SupportScreen key={user.uid} locale={locale} onBack={closeSheet} />
+        </Suspense>
+      </div>
+    );
   const ownDone = plans.filter((p) => p.members.find((m) => m.uid === user.uid)?.completed).length;
   const visiblePlans = filter === 'shared' ? plans.filter((p) => p.members.length > 1) : plans;
   const sharedPlan = plans.find((p) => p.members.length > 1 && p.kind === 'event');
@@ -1201,6 +1277,8 @@ export default function App() {
           onDelete={deleteAccount}
           onLogout={() => setSheet('logout')}
           onInfo={setSheet}
+          adminEligible={adminEligible}
+          onAdmin={() => setAdminOpen(true)}
         />
       ) : (
         <>
@@ -1622,6 +1700,9 @@ export default function App() {
                   onClick={() => setSheet('offline-maps')}
                 />
                 <Row label={t.settings} icon={Settings} onClick={() => setSettings(true)} />
+                {adminEligible && (
+                  <Row label={t.adminPanel} icon={Shield} onClick={() => setAdminOpen(true)} />
+                )}
                 <Row label={t.privacy} icon={Shield} onClick={() => setSheet('privacy')} />
               </div>
               <div className="settings-group">
@@ -2105,11 +2186,9 @@ export default function App() {
           </Suspense>
         </Modal>
       )}
-      {(sheet === 'privacy' || sheet === 'help' || sheet === 'about') && (
+      {(sheet === 'privacy' || sheet === 'about') && (
         <Modal title={t[sheet]} closeLabel={t.close} onClose={closeSheet}>
-          <p className="info-copy">
-            {sheet === 'privacy' ? t.dataNote : sheet === 'help' ? t.helpText : t.aboutText}
-          </p>
+          <p className="info-copy">{sheet === 'privacy' ? t.dataNote : t.aboutText}</p>
           {sheet === 'privacy' && (
             <>
               <p className="info-copy">{t.notificationPrivacy}</p>
@@ -2119,7 +2198,6 @@ export default function App() {
               </button>
             </>
           )}
-          {sheet === 'help' && <p className="info-copy">{t.installIOS}</p>}
         </Modal>
       )}
       {sheet === 'logout' && (
