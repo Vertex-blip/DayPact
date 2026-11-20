@@ -11,8 +11,9 @@ import type {
 } from '../shared/contracts';
 import { texts } from './i18n';
 import { Modal } from './components';
+import { meetingTexts } from './meetingTexts';
 
-export type EditorValue = { plan?: Plan; draft?: PlanInput; place?: Place };
+export type EditorValue = { plan?: Plan; draft?: PlanInput; place?: Place; mode?: 'meeting' };
 interface Props {
   value: EditorValue;
   date: string;
@@ -37,8 +38,11 @@ export function PlanEditor({
 }: Props) {
   const t = texts(locale);
   const initial = value.draft ?? value.plan;
-  const [kind, setKind] = useState<PlanKind>(initial?.kind ?? 'habit');
-  const [cadence, setCadence] = useState<Cadence>(initial?.cadence ?? 'daily');
+  const meeting =
+    value.mode === 'meeting' || (initial?.kind === 'event' && initial.cadence === 'once');
+  const m = meetingTexts(locale);
+  const [kind, setKind] = useState<PlanKind>(initial?.kind ?? (meeting ? 'event' : 'habit'));
+  const [cadence, setCadence] = useState<Cadence>(initial?.cadence ?? (meeting ? 'once' : 'daily'));
   const [members, setMembers] = useState<string[]>(
     (initial?.memberIds ?? []).filter((uid) => uid !== value.plan?.ownerId),
   );
@@ -64,6 +68,10 @@ export function PlanEditor({
     e.preventDefault();
     setError('');
     const input = read(e.currentTarget);
+    if (meeting && !value.plan && input.memberIds.length === 0) {
+      setError(m.pickFriends);
+      return;
+    }
     if (
       kind === 'savings' &&
       (!Number.isSafeInteger(input.targetAmount) ||
@@ -76,16 +84,24 @@ export function PlanEditor({
     await onSave(input, value.plan);
   }
   return (
-    <Modal title={value.plan ? t.editPlan : t.newPlan} onClose={onClose} closeLabel={t.close}>
+    <Modal
+      title={
+        meeting ? (value.plan ? m.editMeeting : m.newMeeting) : value.plan ? t.editPlan : t.newPlan
+      }
+      onClose={onClose}
+      closeLabel={t.close}
+    >
       <form className="form-stack" onSubmit={(e) => void submit(e)}>
+        {meeting && <p className="meeting-editor-intro">{m.intro}</p>}
         <label>
-          {t.title}
+          {meeting ? m.title : t.title}
           <input
             name="title"
             required
             minLength={2}
             maxLength={120}
             autoFocus
+            placeholder={meeting ? m.titleExample : undefined}
             defaultValue={initial?.title ?? ''}
           />
         </label>
@@ -98,28 +114,30 @@ export function PlanEditor({
             defaultValue={initial?.description ?? ''}
           />
         </label>
-        <div className="form-columns">
-          <label>
-            {t.kind}
-            <select value={kind} onChange={(e) => setKind(e.target.value as PlanKind)}>
-              {(['habit', 'event', 'savings'] as const).map((k) => (
-                <option key={k} value={k}>
-                  {t[k]}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            {t.cadence}
-            <select value={cadence} onChange={(e) => setCadence(e.target.value as Cadence)}>
-              {(['once', 'daily', 'weekly', 'monthly'] as const).map((k) => (
-                <option key={k} value={k}>
-                  {t[k]}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
+        {!meeting && (
+          <div className="form-columns">
+            <label>
+              {t.kind}
+              <select value={kind} onChange={(e) => setKind(e.target.value as PlanKind)}>
+                {(['habit', 'event', 'savings'] as const).map((k) => (
+                  <option key={k} value={k}>
+                    {t[k]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              {t.cadence}
+              <select value={cadence} onChange={(e) => setCadence(e.target.value as Cadence)}>
+                {(['once', 'daily', 'weekly', 'monthly'] as const).map((k) => (
+                  <option key={k} value={k}>
+                    {t[k]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        )}
         <div className="form-columns">
           <label>
             {t.date}
@@ -166,8 +184,9 @@ export function PlanEditor({
         )}
         <fieldset>
           <legend>
-            {t.participants} · {members.length}/20
+            {meeting ? m.participants : t.participants} · {members.length}/20
           </legend>
+          {meeting && <p className="form-note">{m.participantsNote}</p>}
           {friends.length ? (
             friends.map((friend) => (
               <label className="checkbox-row" key={friend.uid}>
@@ -195,6 +214,7 @@ export function PlanEditor({
         </fieldset>
         <fieldset>
           <legend>{t.place}</legend>
+          {meeting && <p className="form-note">{m.placeNote}</p>}
           {place ? (
             <div className="chosen-place">
               <MapPin size={18} />
@@ -224,9 +244,10 @@ export function PlanEditor({
         <p className="form-note">
           {t.timezoneHint} · {timeZone}
         </p>
+        {meeting && value.plan && <p className="form-note">{m.changedNote}</p>}
         {error && <p className="inline-message error">{error}</p>}
         <button className="primary full" disabled={busy}>
-          {busy ? t.loading : t.save}
+          {busy ? t.loading : meeting && !value.plan ? m.create : t.save}
         </button>
       </form>
     </Modal>

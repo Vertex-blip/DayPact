@@ -382,6 +382,14 @@
   align-items: center;
   gap: 7px;
 }
+.dp-map-sheet .dp-map-attendance {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: #a7b5c9;
+}
 .dp-map-members {
   display: flex;
   align-items: center;
@@ -707,7 +715,8 @@
 .dp-map-screen[data-map-theme='light'] .dp-map-members > span {
   border-color: #fff;
 }
-.dp-map-screen[data-map-theme='light'] .dp-map-members small {
+.dp-map-screen[data-map-theme='light'] .dp-map-members small,
+.dp-map-screen[data-map-theme='light'] .dp-map-attendance {
   color: #5d6b7d;
 }
 .dp-map-screen[data-map-theme='light'] .dp-map-data,

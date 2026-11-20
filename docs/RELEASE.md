@@ -1,5 +1,21 @@
 # DayPact release verification
 
+## 20 November 2026 — shared meetings
+
+Published to the same Cloudflare origin with additive D1 migration `0002_meetings.sql`. Worker version: `6c5cc619-3dcd-452d-87d7-a7d86581d920`.
+
+- Named one-time meetings support several friends, a date/time, a separate map-place label and an upcoming list. Members propose places and cast one movable/withdrawable vote; the organizer confirms a place. Each person controls their own attendance response.
+- Material changes to a meeting reset attendance. Version checks reject replies to obsolete details, including requests from older clients that omit the version. Proposal retries retain their operation ID and cannot recreate removed proposals.
+- A stalled browser push unsubscribe no longer blocks sign-out indefinitely. Its five-second deadline retains account/subscription guards while allowing sign-out to finish.
+- Live browser verification exposed a delayed-map-load race that could replace a member's newly selected point and typed label with the meeting's original place. External focus now initializes independently of map readiness, preserving later user edits.
+- TypeScript, production build and **118 tests across 10 files passed**, including **46 D1 API tests**. Dependency audit reported zero vulnerabilities. All **43 map resources** still pass their recorded integrity checks.
+- Local browser checks: **8 meeting scenarios** and **8 existing UI scenarios passed**. Covered multi-friend creation, preservation of title/time/members through map selection, future meetings, lost-response proposal retry, vote changes, organizer confirmation, stale RSVP refresh/retry, and Russian/light appearance on a narrow viewport. A delayed-readiness regression reproduces the original focus overwrite and passes with the fix, checking both the edited label and coordinates through the proposal request. No browser exceptions were recorded.
+- Live API verification: **51 checks passed** against the deployed Worker with four separate real Firebase identities. Covered private access, named group meetings, map proposals, retry/payload conflicts, vote movement/withdrawal, actor-spoof denial, organizer-only confirmation, attendance resets after place/time changes, stale responses, friendship revocation and deletion cascades. All four temporary accounts and their application data were deleted; no cleanup remained pending.
+
+The original release record and outstanding physical-device/operational checks follow below. Automated security checks are not a guarantee against every vulnerability.
+
+## 19 November 2026 — initial release
+
 Date: 19 November 2026. App: https://daypact.vertex-blip.workers.dev. Source: https://github.com/Vertex-blip/DayPact.
 
 ## Deployment

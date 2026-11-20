@@ -44,6 +44,8 @@ export interface MapScreenProps {
   onPickPlace?: (place: Place) => void;
   onAddPlan?: () => void;
   onCancelPick?: () => void;
+  focusPlace?: Place | null;
+  pickContext?: 'plan' | 'meeting' | 'proposal';
   userId?: string;
 }
 interface IndexedPlace extends Place {
@@ -72,6 +74,14 @@ const copy = {
     integrity: 'Жүктелген файл толық емес. Қайта жүктеп көріңіз.',
     unsupported: 'Бұл браузер офлайн карта сақтауды қолдамайды. Жаңартылған браузерді қолданыңыз.',
     open: 'Жоспарды ашу',
+    openMeeting: 'Кездесуді ашу',
+    attending: 'келеді',
+    pendingReply: 'жауап күтеміз',
+    pickMeeting: 'Кездесетін орынды картадан таңдаңыз',
+    pickProposal: 'Достарға ұсынатын орынды картадан таңдаңыз',
+    selectMeeting: 'Кездесетін орын ретінде таңдау',
+    selectProposal: 'Осы орынды ұсыну',
+    placeExample: 'Мысалы, футбол алаңы',
     save: 'Сақтау',
     remove: 'Өшіру',
     select: 'Осы орынды таңдау',
@@ -113,6 +123,14 @@ const copy = {
     integrity: 'Файл загрузился не полностью. Попробуйте ещё раз.',
     unsupported: 'Браузер не поддерживает хранение офлайн-карт. Используйте обновлённый браузер.',
     open: 'Открыть план',
+    openMeeting: 'Открыть встречу',
+    attending: 'идут',
+    pendingReply: 'ждём ответа',
+    pickMeeting: 'Выберите на карте место встречи',
+    pickProposal: 'Выберите место, которое хотите предложить друзьям',
+    selectMeeting: 'Выбрать для встречи',
+    selectProposal: 'Предложить это место',
+    placeExample: 'Например, футбольное поле',
     save: 'Сохранить',
     remove: 'Удалить',
     select: 'Выбрать это место',
@@ -156,6 +174,8 @@ export function MapScreen({
   onPickPlace,
   onAddPlan,
   onCancelPick,
+  focusPlace,
+  pickContext = 'plan',
   userId,
 }: MapScreenProps) {
   const t = copy[locale],
@@ -193,6 +213,14 @@ export function MapScreen({
   activeUser.current = userId;
 
   useEffect(() => {
+    setPlan((previous) =>
+      previous
+        ? (plans.find((item) => item.id === previous.id && item.date === previous.date) ?? null)
+        : null,
+    );
+  }, [plans]);
+
+  useEffect(() => {
     void ensureMapPackage().catch(() => {});
   }, []);
   useEffect(() => {
@@ -218,6 +246,24 @@ export function MapScreen({
       alive = false;
     };
   }, [userId]);
+  useEffect(() => {
+    if (!focusPlace || !pkg.manifest) return;
+    if (!pointInBounds(focusPlace, pkg.manifest.bounds)) {
+      setMessage(copy[selection.current.locale].geoOutside);
+      return;
+    }
+    // Initialize an explicit target once, before the map finishes loading.
+    // Readiness must not restore this target over a newer point or typed label.
+    setSearching(false);
+    setPlan(null);
+    setPoint(focusPlace);
+    setLabel(focusPlace.label);
+    map.current?.easeTo({
+      center: [focusPlace.lng, focusPlace.lat],
+      zoom: Math.max(map.current.getZoom(), 15),
+      duration: 450,
+    });
+  }, [focusPlace, pkg.manifest, userId]);
   useEffect(() => {
     if (pkg.status !== 'ready') return;
     let alive = true;
@@ -688,7 +734,15 @@ export function MapScreen({
                   </button>
                 </div>
               )}
-              {onPickPlace && !point && !searching && <div className="dp-map-hint">{t.pick}</div>}
+              {onPickPlace && !point && !searching && (
+                <div className="dp-map-hint">
+                  {pickContext === 'proposal'
+                    ? t.pickProposal
+                    : pickContext === 'meeting'
+                      ? t.pickMeeting
+                      : t.pick}
+                </div>
+              )}
               {tab === 'saved' && !searching && (
                 <div className="dp-map-saved-list">
                   <small>{t.local}</small>
@@ -787,8 +841,17 @@ export function MapScreen({
                 ))}
                 <small>{plan.members.map((m) => m.displayName).join(', ')}</small>
               </div>
+              {plan.kind === 'event' && (
+                <p className="dp-map-attendance">
+                  <Users size={16} />
+                  {plan.members.filter((member) => member.rsvp === 'accepted').length} {t.attending}
+                  <span>·</span>
+                  {plan.members.filter((member) => member.rsvp === 'pending').length}{' '}
+                  {t.pendingReply}
+                </p>
+              )}
               <button className="dp-map-primary" onClick={() => onSelectPlan(plan)}>
-                {t.open}
+                {plan.kind === 'event' ? t.openMeeting : t.open}
               </button>
             </>
           ) : (
@@ -799,6 +862,7 @@ export function MapScreen({
                   <input
                     aria-label={t.point}
                     maxLength={120}
+                    placeholder={pickContext === 'plan' ? undefined : t.placeExample}
                     value={label}
                     onChange={(e) => setLabel(e.target.value)}
                   />
@@ -813,7 +877,11 @@ export function MapScreen({
                       onClick={() => onPickPlace({ ...point, label: label.trim() || t.point })}
                     >
                       <Check size={18} />
-                      {t.select}
+                      {pickContext === 'proposal'
+                        ? t.selectProposal
+                        : pickContext === 'meeting'
+                          ? t.selectMeeting
+                          : t.select}
                     </button>
                   )}
                   {userId && (

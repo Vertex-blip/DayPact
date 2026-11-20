@@ -87,6 +87,8 @@ import { dateLabel, initialLocale, localDate, money, shiftDate, texts } from './
 import { Avatar, Empty, Modal, PageHeader, Row } from './components';
 import { PlanEditor, type EditorValue } from './PlanEditor';
 import { SettingsScreen } from './Settings';
+import { MeetingDetail } from './MeetingDetail';
+import { meetingTexts } from './meetingTexts';
 import { clearSavedPlaces } from './map/savedPlaces';
 import './styles.css';
 
@@ -105,6 +107,7 @@ type Sheet =
   | 'about'
   | 'logout'
   | 'queue'
+  | 'meetings'
   | null;
 interface Toast {
   text: string;
@@ -119,6 +122,7 @@ export default function App() {
   const [authRevision, setAuthRevision] = useState(0);
   const [locale, setLocale] = useState<Locale>(initialLocale);
   const t = texts(locale);
+  const mt = meetingTexts(locale);
   const api = <T,>(path: string, options: ApiOptions = {}) =>
     unscopedApi<T>(path, { ...options, expectedUid: user?.uid ?? '' });
   const writeApi = <T,>(path: string, method: string, body?: unknown) =>
@@ -130,6 +134,15 @@ export default function App() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [friends, setFriends] = useState<Friend[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
+  const [meetings, setMeetings] = useState<Plan[]>([]);
+  const [focusedPlace, setFocusedPlace] = useState<Place | null>(null);
+  const [meetingProposal, setMeetingProposal] = useState<{
+    plan: Plan;
+    uid: string;
+    operationId: string;
+    place?: Place;
+    picking: boolean;
+  } | null>(null);
   const [date, setDate] = useState(() => localDate());
   const [tab, setTab] = useState<Tab>('home');
   const [settings, setSettings] = useState(false);
@@ -209,6 +222,9 @@ export default function App() {
             markPushRegistration(null);
             setProfile(null);
             setPlans([]);
+            setMeetings([]);
+            setMeetingProposal(null);
+            setFocusedPlace(null);
             setFriends([]);
             setNotifications([]);
             setPending([]);
@@ -268,6 +284,9 @@ export default function App() {
     void setActivePushUser(null);
     setProfile(null);
     setPlans([]);
+    setMeetings([]);
+    setMeetingProposal(null);
+    setFocusedPlace(null);
     setFriends([]);
     setNotifications([]);
     setPending([]);
@@ -320,6 +339,7 @@ export default function App() {
       if (saved && seq === requestSequence.current && currentAuth()?.currentUser?.uid === uid) {
         setProfile((prev) => prev ?? saved.profile);
         setFriends(saved.friends);
+        setMeetings(saved.meetings ?? []);
         if (saved.date === wantedDate) setPlans(saved.plans);
       }
       try {
@@ -339,6 +359,16 @@ export default function App() {
         setProfile(next.profile);
         setFriends(next.friends);
         setPlans(applyPending(next.plans, uid, queued));
+        setMeetings(applyPending(next.meetings ?? [], uid, queued));
+        setSelected((prev) => {
+          if (!prev) return null;
+          const current = [...next.plans, ...(next.meetings ?? [])].find(
+            (p) => p.id === prev.id && p.date === prev.date,
+          );
+          if (current) return applyPending([current], uid, queued)[0];
+          if (prev.kind === 'event' && prev.cadence === 'once') return null;
+          return prev.date === wantedDate ? null : prev;
+        });
         setStale(false);
         chooseLocale(next.profile.settings.locale);
         void api<{ notifications: AppNotification[] }>('/notifications')
@@ -365,6 +395,9 @@ export default function App() {
           setDeletionPending(['ACCOUNT_DELETED', 'AUTH_DELETE_PENDING'].includes(err.code));
           setProfile(null);
           setPlans([]);
+          setMeetings([]);
+          setMeetingProposal(null);
+          setFocusedPlace(null);
           setFriends([]);
           setLoadError(err);
           return;
@@ -380,12 +413,14 @@ export default function App() {
           setProfile(saved.profile);
           setFriends(saved.friends);
           setPlans(applyPending(saved.date === wantedDate ? saved.plans : [], uid, queued));
+          setMeetings(applyPending(saved.meetings ?? [], uid, queued));
           setPending(queued);
           setStale(true);
           if (navigator.onLine) setLoadError(err);
         } else {
           setLoadError(err);
           setPlans([]);
+          setMeetings([]);
         }
       } finally {
         if (seq === requestSequence.current) setLoading(false);
@@ -579,6 +614,7 @@ export default function App() {
       }
       setPending(queue);
       setPlans((prev) => applyPending(prev, uid, queue));
+      setMeetings((prev) => applyPending(prev, uid, queue));
       setSelected((prev) => (prev?.id === plan.id ? applyPending([prev], uid, queue)[0] : prev));
       setContribution(null);
       if (navigator.onLine) await synchronize(true);
@@ -604,6 +640,7 @@ export default function App() {
       await writeApi(`/plans/${encodeURIComponent(plan.id)}/rsvp`, 'POST', {
         date: plan.date,
         status,
+        version: plan.version,
       });
       setSelected({
         ...plan,
@@ -712,6 +749,9 @@ export default function App() {
           setPlans([]);
           setFriends([]);
           setDeletionPending(true);
+          setMeetings([]);
+          setMeetingProposal(null);
+          setFocusedPlace(null);
           setLoadError(err);
         }
         throw err;
@@ -806,12 +846,48 @@ export default function App() {
     history.replaceState(null, '', url);
   }
   function pickPlace(place: Place) {
+    if (meetingProposal?.picking) {
+      if (meetingProposal.uid !== currentAuth()?.currentUser?.uid) return;
+      setMeetingProposal({ ...meetingProposal, place, picking: false });
+      setFocusedPlace(place);
+      setSelected(meetingProposal.plan);
+      return;
+    }
     setEditor({ ...pickerDraft, place });
     setPickerDraft(null);
   }
+  function newMeeting(friend?: Friend) {
+    setSheet(null);
+    setEditor({
+      mode: 'meeting',
+      ...(friend
+        ? {
+            draft: {
+              title: '',
+              kind: 'event' as const,
+              cadence: 'once' as const,
+              startDate: date,
+              time: '19:00',
+              timeZone: profile?.settings.timeZone,
+              memberIds: [friend.uid],
+              remindMinutes: 15,
+            },
+          }
+        : {}),
+    });
+  }
+  function openMeeting(plan: Plan) {
+    setSheet(null);
+    setDate(plan.date);
+    setSelected(plan);
+    setMeetingProposal(null);
+  }
   const closeSheet = useCallback(() => setSheet(null), []);
   const closeEditor = useCallback(() => setEditor(null), []);
-  const closeSelected = useCallback(() => setSelected(null), []);
+  const closeSelected = useCallback(() => {
+    setSelected(null);
+    setMeetingProposal(null);
+  }, []);
 
   if (!authReady)
     return (
@@ -906,6 +982,9 @@ export default function App() {
   const pendingCount = pending.length + pendingDrafts.length;
   const mapPlans: Plan[] = [
     ...plans,
+    ...meetings.filter(
+      (meeting) => !plans.some((plan) => plan.id === meeting.id && plan.date === meeting.date),
+    ),
     ...pendingDrafts
       .filter((d) => !d.error && d.input.place)
       .map((d) => ({
@@ -1044,6 +1123,43 @@ export default function App() {
                   />
                 </div>
               </section>
+              <section className="meetings-overview">
+                <div className="meetings-section-head">
+                  <div>
+                    <h2>{mt.meetings}</h2>
+                    <p>{mt.intro}</p>
+                  </div>
+                  <button
+                    className="meeting-create-button"
+                    onClick={() => newMeeting()}
+                    aria-label={mt.newMeeting}
+                  >
+                    <Plus size={19} />
+                    {locale === 'kk' ? 'Құру' : 'Создать'}
+                  </button>
+                </div>
+                {meetings.length ? (
+                  <>
+                    <div className="upcoming-meetings">
+                      {meetings.slice(0, 2).map((meeting) => (
+                        <MeetingCard
+                          key={meeting.id}
+                          plan={meeting}
+                          locale={locale}
+                          onClick={() => openMeeting(meeting)}
+                        />
+                      ))}
+                    </div>
+                    {meetings.length > 2 && (
+                      <button className="text-button full" onClick={() => setSheet('meetings')}>
+                        {t.all} · {meetings.length}
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <p className="meetings-empty">{mt.emptyNote}</p>
+                )}
+              </section>
               {!!loadError && online && (
                 <div className="inline-message error content-margin">
                   <span>{readableError(loadError, locale)}</span>
@@ -1167,20 +1283,39 @@ export default function App() {
                   locale={locale}
                   theme={profile.settings.theme}
                   userId={user.uid}
+                  focusPlace={focusedPlace}
+                  pickContext={
+                    meetingProposal?.picking
+                      ? 'proposal'
+                      : pickerDraft?.mode === 'meeting' || pickerDraft?.draft?.kind === 'event'
+                        ? 'meeting'
+                        : 'plan'
+                  }
                   onSelectPlan={(plan) => {
                     if (plan.id.startsWith('pending:')) setSheet('queue');
+                    else if (plan.kind === 'event' && plan.cadence === 'once') openMeeting(plan);
                     else setSelected(plan);
                   }}
-                  onPickPlace={pickerDraft ? pickPlace : undefined}
+                  onPickPlace={pickerDraft || meetingProposal?.picking ? pickPlace : undefined}
                   onAddPlan={
-                    !pickerDraft
+                    !pickerDraft && !meetingProposal?.picking
                       ? () => {
                           setPickerDraft({});
                           setSelected(null);
                         }
                       : undefined
                   }
-                  onCancelPick={pickerDraft ? () => setPickerDraft(null) : undefined}
+                  onCancelPick={
+                    pickerDraft || meetingProposal?.picking
+                      ? () => {
+                          setPickerDraft(null);
+                          if (meetingProposal?.picking) {
+                            setSelected(meetingProposal.plan);
+                            setMeetingProposal(null);
+                          }
+                        }
+                      : undefined
+                  }
                 />
               </Suspense>
             </main>
@@ -1200,6 +1335,12 @@ export default function App() {
                 </button>
               </PageHeader>
               <p className="page-intro">{t.friendsIntro}</p>
+              {friends.length > 0 && (
+                <button className="secondary friends-meeting-button" onClick={() => newMeeting()}>
+                  <CalendarDays size={18} />
+                  {mt.newMeeting}
+                </button>
+              )}
               {friends.length ? (
                 <div className="friend-list">
                   {friends.map((friend) => (
@@ -1212,6 +1353,13 @@ export default function App() {
                           {friend.city ? ` · ${friend.city}` : ''}
                         </small>
                       </div>
+                      <button
+                        className="icon-button blue"
+                        aria-label={`${mt.newMeeting}: ${friend.displayName}`}
+                        onClick={() => newMeeting(friend)}
+                      >
+                        <CalendarDays size={20} />
+                      </button>
                       <button
                         className="icon-button muted"
                         aria-label={`${t.removeFriend}: ${friend.displayName}`}
@@ -1283,6 +1431,7 @@ export default function App() {
               </div>
               <div className="group-caption">{t.plans.toUpperCase()}</div>
               <div className="settings-group">
+                <Row label={mt.meetings} icon={CalendarDays} onClick={() => setSheet('meetings')} />
                 <Row
                   label={t.allPlans}
                   icon={CalendarDays}
@@ -1345,6 +1494,7 @@ export default function App() {
                 setTab(item.id);
                 if (item.id === 'map') setMapStartTab('plans');
                 setPickerDraft(null);
+                setMeetingProposal(null);
               }}
             >
               <item.icon size={24} />
@@ -1365,13 +1515,92 @@ export default function App() {
           onClose={closeEditor}
           onSave={savePlan}
           onPickPlace={(draft, plan) => {
-            setPickerDraft({ draft, plan });
+            setPickerDraft({ draft, plan, mode: editor.mode });
             setEditor(null);
             setTab('map');
           }}
         />
       )}
-      {selected && (
+      {selected?.kind === 'event' && selected.cadence === 'once' && (
+        <MeetingDetail
+          key={`${user.uid}:${selected.id}`}
+          plan={selected}
+          uid={user.uid}
+          locale={locale}
+          online={online}
+          busy={busy}
+          onClose={closeSelected}
+          onRefresh={refresh}
+          proposal={
+            meetingProposal?.uid === user.uid &&
+            meetingProposal.plan.id === selected.id &&
+            meetingProposal.place
+              ? { operationId: meetingProposal.operationId, place: meetingProposal.place }
+              : undefined
+          }
+          onEdit={() => {
+            setEditor({ plan: selected, mode: 'meeting' });
+            setSelected(null);
+            setMeetingProposal(null);
+          }}
+          onDelete={() => setConfirmDelete(selected)}
+          onCheckin={() =>
+            void checkin(
+              selected,
+              !selected.members.find((member) => member.uid === user.uid)?.completed,
+            )
+          }
+          onViewPlace={(place) => {
+            setFocusedPlace(place);
+            setSelected(null);
+            setTab('map');
+          }}
+          onPickPlace={() => {
+            setMeetingProposal({
+              plan: selected,
+              uid: user.uid,
+              operationId: crypto.randomUUID(),
+              picking: true,
+            });
+            setFocusedPlace(selected.place ?? null);
+            setSelected(null);
+            setPickerDraft(null);
+            setTab('map');
+          }}
+          onDiscardProposal={() => setMeetingProposal(null)}
+          onProposalSaved={() => setMeetingProposal(null)}
+          onPlanChanged={(plan) => {
+            setSelected((current) => (current?.id === plan.id ? plan : current));
+            setMeetings((current) => current.map((p) => (p.id === plan.id ? plan : p)));
+            setPlans((current) =>
+              current.map((p) => (p.id === plan.id && p.date === plan.date ? plan : p)),
+            );
+          }}
+        />
+      )}
+      {sheet === 'meetings' && (
+        <Modal title={mt.upcoming} onClose={closeSheet} closeLabel={t.close}>
+          <button className="primary full" onClick={() => newMeeting()}>
+            <Plus size={18} />
+            {mt.newMeeting}
+          </button>
+          {meetings.length ? (
+            <div className="upcoming-meetings meeting-list">
+              {meetings.map((meeting) => (
+                <MeetingCard
+                  key={meeting.id}
+                  plan={meeting}
+                  locale={locale}
+                  onClick={() => openMeeting(meeting)}
+                />
+              ))}
+            </div>
+          ) : (
+            <Empty icon={CalendarDays} title={mt.empty} note={mt.emptyNote} />
+          )}
+        </Modal>
+      )}
+      {selected && !(selected.kind === 'event' && selected.cadence === 'once') && (
         <Modal title={selected.title} onClose={closeSelected} closeLabel={t.close}>
           <div className="plan-detail-meta">
             <Clock size={18} />
@@ -1381,6 +1610,7 @@ export default function App() {
             <button
               className="place-line detail-place"
               onClick={() => {
+                setFocusedPlace(selected.place ?? null);
                 setSelected(null);
                 setTab('map');
               }}
@@ -1836,6 +2066,40 @@ export default function App() {
         <ToastMessage toast={toast} onClose={() => setToast(null)} label={t.closeNotification} />
       )}
     </div>
+  );
+}
+
+function MeetingCard({
+  plan,
+  locale,
+  onClick,
+}: {
+  plan: Plan;
+  locale: Locale;
+  onClick: () => void;
+}) {
+  const m = meetingTexts(locale);
+  const going = plan.members.filter((member) => member.rsvp === 'accepted').length;
+  return (
+    <button className="meeting-card" onClick={onClick}>
+      <span className="meeting-date">
+        <b>{Number(plan.date.slice(-2))}</b>
+        <small>{dateLabel(plan.date, locale, { month: 'short' })}</small>
+      </span>
+      <span className="meeting-card-copy">
+        <b>{plan.title}</b>
+        <span>
+          <Clock size={13} />
+          {plan.time}
+          {plan.place && <> · {plan.place.label}</>}
+        </span>
+        <small>
+          <Users size={13} />
+          {going}/{plan.members.length} · {m.going}
+        </small>
+      </span>
+      <ChevronRight size={18} />
+    </button>
   );
 }
 

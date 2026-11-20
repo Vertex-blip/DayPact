@@ -19,6 +19,9 @@ The Firebase web API key/public configuration are client configuration, not admi
 - Removing a friendship revokes reciprocal membership in plans owned by those two users. A third owner's shared plan is a separate relationship.
 - Plan updates combine a version check and transaction-scoped mutation marker. Losing concurrent updates cannot alter members. Check-in IDs bind to payload fingerprints and cannot replay over newer progress.
 - Offline plan creation uses actor-scoped UUID receipts and an atomic receipt/plan/member transaction. Different payloads cannot reuse a key. Receipts survive plan deletion, preventing delayed retries from recreating removed plans or re-adding revoked members.
+- One-time meeting proposals and votes require current membership. Upcoming lists and proposal reads include the viewer's membership in the same SQL statement as private rows. A vote belongs to its authenticated actor and cannot target an option in another meeting.
+- Proposal receipts bind the actor, meeting and place to one operation ID. Receipts survive proposal removal, so a delayed replay cannot restore a removed proposal after re-invitation. Membership foreign keys cascade proposals and votes; database triggers enforce three proposals per member and 24 per meeting even during concurrent requests.
+- Only the organizer can adopt a proposed place, using a version-checked update. RSVP writes also check the current version and membership atomically. Missing versions from older clients are rejected with a refresh conflict. A successful change to event details clears applicable responses; losing concurrent edits cannot clear them. Neither the organizer nor another member can submit attendance for someone else.
 - Invitation tokens have 256 bits of cryptographic randomness, are stored hashed, expire after seven days and are consumed atomically. Friends see limited public profiles; exports exclude other users' private profiles, emails and push tokens.
 
 Revocation controls subsequent authorized access; it cannot erase information a member already saw, copied or cached. Progress and savings are self-reported, not financial transactions or proof of physical attendance.
@@ -49,6 +52,8 @@ Push text is generic and excludes plan content, locations, religion, amounts and
 
 A two-minute delivery lease prevents overlapping workers from normally sending the same row. Claims read current preferences; disabled notifications/nudges, quiet hours, missing devices and records older than 24 hours are skipped. Transient failures retry with bounded backoff; unregistered tokens are removed. All-invalid tokens do not count as successful delivery. D1 atomically limits each user to three devices.
 
+Browser SDK push-subscription cleanup has a five-second deadline and is best effort, so that cleanup cannot indefinitely block sign-out or completed account deletion. Sign-out starts private-storage cleanup and clears the active push recipient before subscription cleanup, then awaits the private-storage cleanup before finishing. This deadline does not guarantee provider-side token deletion while offline or during an outage.
+
 Delivery is best effort and at least once, not exactly once or guaranteed at an exact minute. Crashes and partial multi-device success can repeat sends; stable browser tags reduce visible duplicates. A preference change after a claim cannot retract an already in-flight send. Push requires connectivity and permission; offline plans do not provide offline push delivery.
 
 ## Work bounds and operational limits
@@ -58,6 +63,8 @@ Each invocation queues at most five indexed due plans and delivers at most three
 Live Cloudflare CPU profiling has **not** been completed. A subrequest count does not prove the free plan's CPU or daily quotas are sufficient. Membership counts, cryptographic work, provider latency and backlogs need measurement. Bounded batches can delay burst traffic. Storage growth, retention and backups need monitoring; bounded rate-limit cleanup is not a general retention policy.
 
 Exports paginate check-ins instead of silently cutting off history. Clients follow `nextCursor` to completion or show a memory-limit failure. Pages are live reads, not a frozen snapshot.
+
+Upcoming meetings are limited to the nearest 50 one-time events, with member progress read in one bounded query. Exported meeting places, votes and current one-time-event responses are scoped to the exporting user and bounded by active-plan/proposal limits; they do not disclose other members' contributions.
 
 ## Deletion and recovery
 

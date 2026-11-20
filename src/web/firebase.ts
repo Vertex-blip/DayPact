@@ -21,6 +21,7 @@ export const firebaseConfigured = Object.values(config).every(
 let app: FirebaseApp | null = null;
 let auth: Auth | null = null;
 let initialization: Promise<Auth | null> | null = null;
+let pendingPushCleanup: Promise<void> | null = null;
 export function initializeAuth(): Promise<Auth | null> {
   if (!firebaseConfigured) return Promise.resolve(null);
   if (initialization) return initialization;
@@ -57,6 +58,10 @@ export async function registerPush(): Promise<string> {
     if (expired) throw new Error('PUSH_TIMEOUT');
   };
   const setup = async () => {
+    // An expired logout cleanup may still be inside the SDK. Do not create a
+    // replacement subscription until that operation can no longer remove it.
+    await pendingPushCleanup?.catch(() => {});
+    requirePending();
     const supported = await isSupported();
     requirePending();
     if (!supported) throw new Error('PUSH_UNSUPPORTED');
@@ -81,7 +86,36 @@ export async function registerPush(): Promise<string> {
   }
 }
 export async function unregisterPush(): Promise<void> {
-  if (app && (await isSupported())) await deleteToken(getMessaging(app));
+  if (!app) return;
+  let expired = false;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      expired = true;
+      reject(new Error('PUSH_TIMEOUT'));
+    }, 5000);
+  });
+  let cleanup = pendingPushCleanup;
+  if (!cleanup) {
+    const instance = app;
+    cleanup = (async () => {
+      const supported = await isSupported();
+      if (expired) throw new Error('PUSH_TIMEOUT');
+      if (supported) await deleteToken(getMessaging(instance));
+    })();
+    pendingPushCleanup = cleanup;
+    const release = () => {
+      if (pendingPushCleanup === cleanup) pendingPushCleanup = null;
+    };
+    void cleanup.then(release, release);
+  }
+  try {
+    // Push cleanup is best effort; it must not prevent the caller from signing
+    // out or finishing deletion when the browser/provider does not respond.
+    await Promise.race([cleanup, deadline]);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 export function deviceId(): string {
   let id = localStorage.getItem('daypact.device');

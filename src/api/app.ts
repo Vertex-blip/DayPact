@@ -17,6 +17,9 @@ import {
   pushSchema,
   idSchema,
   emptySchema,
+  meetingPlaceSchema,
+  meetingVoteSchema,
+  meetingConfirmSchema,
 } from './domain/schemas';
 import {
   ensureUser,
@@ -36,6 +39,14 @@ import {
   type PlanRow,
 } from './domain/repository';
 import { occurs, localParts, nextReminder, isQuiet } from './domain/dates';
+import {
+  upcomingMeetings,
+  meetingPlaces,
+  proposeMeetingPlace,
+  voteMeetingPlace,
+  confirmMeetingPlace,
+  samePlace,
+} from './domain/meetings';
 
 type Bindings = { Bindings: Env; Variables: { identity: Identity; user: UserRow } };
 const ok = { ok: true } as const;
@@ -100,6 +111,8 @@ export function createApi(verify: Authenticator = defaultAuthenticate) {
       ['INVITATION_LIMIT', 'INVITATION_LIMIT', 429],
       ['DEVICE_LIMIT', 'DEVICE_LIMIT', 409],
       ['push_tokens.token', 'TOKEN_CONFLICT', 409],
+      ['PLACE_LIMIT', 'PLACE_LIMIT', 409],
+      ['MEETING_REQUIRED', 'MEETING_REQUIRED', 400],
     ] as const) {
       if (message.includes(needle))
         return errorResponse(status, code, 'The request could not be completed', requestId);
@@ -205,6 +218,45 @@ export function createApi(verify: Authenticator = defaultAuthenticate) {
         date,
       ),
     });
+  });
+  app.get('/meetings', async (c) => {
+    const from = dateSchema.parse(
+      c.req.query('from') ?? localParts(new Date(), settingsOf(c.get('user')).timeZone).date,
+    );
+    return c.json({ meetings: await upcomingMeetings(c.env.DB, ownsIdentity(c), from) });
+  });
+  app.get('/plans/:id/places', async (c) => {
+    return c.json(
+      await meetingPlaces(c.env.DB, idSchema.parse(c.req.param('id')), ownsIdentity(c)),
+    );
+  });
+  app.post('/plans/:id/places', async (c) => {
+    const result = await proposeMeetingPlace(
+      c.env.DB,
+      idSchema.parse(c.req.param('id')),
+      ownsIdentity(c),
+      meetingPlaceSchema.parse(await c.req.json()),
+    );
+    return c.json(result.places, result.created ? 201 : 200);
+  });
+  app.put('/plans/:id/place-vote', async (c) => {
+    const input = meetingVoteSchema.parse(await c.req.json());
+    await voteMeetingPlace(
+      c.env.DB,
+      idSchema.parse(c.req.param('id')),
+      ownsIdentity(c),
+      input.optionId,
+    );
+    return c.json(ok);
+  });
+  app.post('/plans/:id/place-confirm', async (c) => {
+    const plan = await confirmMeetingPlace(
+      c.env.DB,
+      idSchema.parse(c.req.param('id')),
+      ownsIdentity(c),
+      meetingConfirmSchema.parse(await c.req.json()),
+    );
+    return c.json({ plan });
   });
   app.post('/plans', async (c) => {
     const input = planSchema.parse(await c.req.json()),
@@ -344,6 +396,15 @@ export function createApi(verify: Authenticator = defaultAuthenticate) {
         },
         now,
       );
+    const resetResponses =
+      old.kind === 'event' &&
+      (input.kind !== old.kind ||
+        input.cadence !== old.cadence ||
+        input.startDate !== old.start_date ||
+        input.time !== old.time ||
+        zone !== old.time_zone ||
+        !samePlace(old.place_json, input.place));
+    const resetFrom = [localParts(now, old.time_zone).date, localParts(now, zone).date].sort()[0];
     const results = await c.env.DB.batch([
       c.env.DB.prepare(
         `UPDATE plans SET title=?,description=?,kind=?,cadence=?,start_date=?,time=?,time_zone=?,place_json=?,target_amount=?,remind_minutes=?,version=version+1,mutation_id=?,next_reminder_at=?,next_reminder_date=?,updated_at=? WHERE id=? AND owner_id=? AND version=?`,
@@ -366,6 +427,9 @@ export function createApi(verify: Authenticator = defaultAuthenticate) {
         uid,
         version,
       ),
+      c.env.DB.prepare(
+        'DELETE FROM rsvps WHERE plan_id=? AND occurrence_date>=? AND ?=1 AND EXISTS(SELECT 1 FROM plans WHERE id=? AND mutation_id=?)',
+      ).bind(id, resetFrom, resetResponses ? 1 : 0, id, mutation),
       c.env.DB.prepare(
         `DELETE FROM plan_members WHERE plan_id=? AND user_id<>? AND user_id NOT IN(SELECT value FROM json_each(?)) AND EXISTS(SELECT 1 FROM plans WHERE id=? AND mutation_id=?)`,
       ).bind(id, uid, JSON.stringify(members), id, mutation),
@@ -446,11 +510,22 @@ export function createApi(verify: Authenticator = defaultAuthenticate) {
       input = rsvpSchema.parse(await c.req.json());
     const plan = await memberPlan(c.env.DB, id, uid);
     requireOccurrence(plan, input.date);
-    await c.env.DB.prepare(
-      `INSERT INTO rsvps(plan_id,user_id,occurrence_date,status,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(plan_id,user_id,occurrence_date) DO UPDATE SET status=excluded.status,updated_at=excluded.updated_at`,
+    if (plan.kind !== 'event')
+      throw new HttpError(400, 'MEETING_REQUIRED', 'Only events accept attendance responses');
+    if (plan.version !== input.version)
+      throw new HttpError(409, 'VERSION_CONFLICT', 'The meeting has changed; refresh it');
+    const result = await c.env.DB.prepare(
+      `INSERT INTO rsvps(plan_id,user_id,occurrence_date,status,updated_at)
+      SELECT p.id,?,?,?,? FROM plans p JOIN plan_members m ON m.plan_id=p.id AND m.user_id=?
+      WHERE p.id=? AND p.kind='event' AND p.version=?
+      ON CONFLICT(plan_id,user_id,occurrence_date) DO UPDATE SET status=excluded.status,updated_at=excluded.updated_at`,
     )
-      .bind(id, uid, input.date, input.status, new Date().toISOString())
+      .bind(uid, input.date, input.status, new Date().toISOString(), uid, id, input.version)
       .run();
+    if (!result.meta.changes) {
+      await memberPlan(c.env.DB, id, uid);
+      throw new HttpError(409, 'VERSION_CONFLICT', 'The meeting has changed; refresh it');
+    }
     return c.json(ok);
   });
   app.post('/plans/:id/nudges', async (c) => {
@@ -627,18 +702,30 @@ export function createApi(verify: Authenticator = defaultAuthenticate) {
         : null;
     let header: Record<string, unknown> = {};
     if (!cursor) {
-      const [plans, friends] = await c.env.DB.batch([
+      const [plans, friends, meetingPlaces, meetingVotes, meetingResponses] = await c.env.DB.batch([
         c.env.DB.prepare(
           `SELECT p.id,p.owner_id,p.title,p.description,p.kind,p.cadence,p.start_date,p.time,p.time_zone,p.place_json,p.target_amount,p.remind_minutes,p.created_at,p.updated_at FROM plans p JOIN plan_members m ON m.plan_id=p.id WHERE m.user_id=? LIMIT 200`,
         ).bind(uid),
         c.env.DB.prepare(
           'SELECT CASE WHEN user_low=? THEN user_high ELSE user_low END AS uid,created_at FROM friendships WHERE user_low=? OR user_high=? LIMIT 200',
         ).bind(uid, uid, uid),
+        c.env.DB.prepare(
+          'SELECT id,plan_id,place_json,created_at FROM meeting_places WHERE proposed_by=? ORDER BY created_at,id LIMIT 600',
+        ).bind(uid),
+        c.env.DB.prepare(
+          'SELECT plan_id,option_id,updated_at FROM meeting_place_votes WHERE user_id=? ORDER BY plan_id LIMIT 200',
+        ).bind(uid),
+        c.env.DB.prepare(
+          "SELECT r.plan_id,r.occurrence_date,r.status,r.updated_at FROM rsvps r JOIN plans p ON p.id=r.plan_id WHERE r.user_id=? AND p.kind='event' AND p.cadence='once' AND r.occurrence_date=p.start_date ORDER BY r.plan_id LIMIT 200",
+        ).bind(uid),
       ]);
       header = {
         profile: profileOf(c.get('user')),
         plans: plans.results,
         friendships: friends.results,
+        meetingPlaces: meetingPlaces.results,
+        meetingVotes: meetingVotes.results,
+        meetingResponses: meetingResponses.results,
       };
     }
     c.header('Content-Disposition', 'attachment; filename="daypact-data.json"');

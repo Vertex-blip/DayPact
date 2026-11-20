@@ -39,6 +39,7 @@ export interface Snapshot {
   profile: Profile;
   friends: Friend[];
   plans: Plan[];
+  meetings?: Plan[];
   date: string;
   savedAt: number;
 }
@@ -325,10 +326,17 @@ export async function fetchSnapshot(
   date: string,
   expectedUid?: string,
 ): Promise<Omit<Snapshot, 'savedAt'>> {
-  const [me, friends, plans] = await Promise.all([
+  const [me, friends, plans, meetings] = await Promise.all([
     api<{ profile: Profile }>('/me', { expectedUid }),
     api<{ friends: Friend[] }>('/friends', { expectedUid }),
     api<{ plans: Plan[] }>(`/plans?date=${encodeURIComponent(date)}`, { expectedUid }),
+    api<{ meetings: Plan[] }>('/meetings', { expectedUid }),
   ]);
-  return { profile: me.profile, friends: friends.friends, plans: plans.plans, date };
+  return {
+    profile: me.profile,
+    friends: friends.friends,
+    plans: plans.plans,
+    meetings: meetings.meetings,
+    date,
+  };
 }

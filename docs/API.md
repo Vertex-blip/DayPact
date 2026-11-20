@@ -2,7 +2,7 @@
 
 The PWA and API use the same origin. Except for `GET /api/health`, every route requires `Authorization: Bearer <Firebase ID token>`. The server verifies the token and performs a live Firebase account lookup to reject disabled, deleted, unverified or revoked accounts. Actor IDs come from this verified identity. No HTTP or environment variable can bypass authentication.
 
-Requests and responses use JSON. POST, PUT and PATCH require `Content-Type: application/json`; bodies are limited to 16 KiB. Unknown write fields are rejected. API responses use `Cache-Control: no-store`. Errors have the shape `{error:{code,message,requestId}}`. Clients should translate `code`; messages are not a localization contract.
+Requests and responses use JSON. Mutating requests, including DELETE, require `Content-Type: application/json`; bodies are limited to 16 KiB. Unknown write fields are rejected. API responses use `Cache-Control: no-store`. Errors have the shape `{error:{code,message,requestId}}`. Clients should translate `code`; messages are not a localization contract.
 
 Shared types are in `src/shared/contracts.ts`; server validation is in `src/api/domain/schemas.ts`. Dates are real calendar dates in `YYYY-MM-DD` format, times are `HH:mm`, timestamps are UTC ISO 8601 strings, and amounts are integer tenge. Plans have their own IANA time zone. Supported calendar years are 2000–2100.
 
@@ -35,15 +35,15 @@ Removing a friendship removes each former friend from plans owned by the other. 
 
 ## Plans and progress
 
-| Method and path                  | Request                                                   | Response                                             |
-| -------------------------------- | --------------------------------------------------------- | ---------------------------------------------------- |
-| `GET /api/plans?date=YYYY-MM-DD` | Optional date; defaults to today in the account time zone | `{plans:Plan[]}`                                     |
-| `POST /api/plans`                | `PlanInput`; optional `Idempotency-Key` header            | `{plan:Plan}`; status 201 on creation, 200 on replay |
-| `PATCH /api/plans/:id`           | Partial `PlanInput` plus required `{version:number}`      | `{plan:Plan}`                                        |
-| `DELETE /api/plans/:id`          | None                                                      | `{ok:true}`                                          |
-| `POST /api/plans/:id/checkins`   | `{date,completed,contribution?,operationId}`              | `{ok:true}`                                          |
-| `POST /api/plans/:id/rsvp`       | `{date,status:"accepted"                                  | "declined"}`                                         | `{ok:true}` |
-| `POST /api/plans/:id/nudges`     | `{toUserId,date}`                                         | `{ok:true}`                                          |
+| Method and path                  | Request                                                     | Response                                             |
+| -------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------- |
+| `GET /api/plans?date=YYYY-MM-DD` | Optional date; defaults to today in the account time zone   | `{plans:Plan[]}`                                     |
+| `POST /api/plans`                | `PlanInput`; optional `Idempotency-Key` header              | `{plan:Plan}`; status 201 on creation, 200 on replay |
+| `PATCH /api/plans/:id`           | Partial `PlanInput` plus required `{version:number}`        | `{plan:Plan}`                                        |
+| `DELETE /api/plans/:id`          | None                                                        | `{ok:true}`                                          |
+| `POST /api/plans/:id/checkins`   | `{date,completed,contribution?,operationId}`                | `{ok:true}`                                          |
+| `POST /api/plans/:id/rsvp`       | `{date,status,version}`; status is `accepted` or `declined` | `{ok:true}`                                          |
+| `POST /api/plans/:id/nudges`     | `{toUserId,date}`                                           | `{ok:true}`                                          |
 
 Only members can read a plan or submit their own progress/RSVP; only the owner can change or delete it. Additional members must be current friends of the owner. The owner always remains a member. A plan accepts at most 20 supplied member IDs in addition to its owner; an account can belong to at most 200 plans. The database also enforces these limits and membership relationships.
 
@@ -51,11 +51,31 @@ Kinds are `habit`, `event`, `savings`; recurrence is `once`, `daily`, `weekly`, 
 
 `remindMinutes` is `-1` to disable, `0` at the scheduled time, or a positive number up to 10,080 minutes before it. Editing recalculates the next reminder. PATCH uses optimistic concurrency: a stale `version` returns `409 VERSION_CONFLICT` without changing the plan or membership. Refresh and resolve the conflict.
 
+RSVP applies only to events and only to the authenticated member's own attendance. It requires the current plan `version`; an obsolete or omitted version returns `409 VERSION_CONFLICT` without writing a response. Omitted versions from older clients therefore prompt a refresh instead of accepting attendance for unreviewed details. Changing an event's place, date, time, time zone or recurrence clears applicable current/future responses so participants can decide again. Changes to a title alone do not reset responses. A stale failed edit cannot clear attendance.
+
 For offline creation, generate a UUID once and send it in `Idempotency-Key` on every retry of that draft. Keys are scoped to the authenticated user. Normalized request fields are fingerprinted; concurrent identical requests create only one plan. Reuse with changed fields returns `409 OPERATION_CONFLICT`. A replay returns the current original plan without rewriting it or restoring removed friends. If that plan was deleted, replay returns `404 PLAN_NOT_FOUND` and never recreates it. A failed transaction does not consume the key. Changing the account's default time zone after the original request does not invalidate an otherwise identical replay. Requests without the header create a new plan each time.
 
 Check-ins must match an occurrence and cannot be in the future in the plan's time zone. `operationId` is a UUID identifying that user's intended action. Replaying the same ID/payload succeeds without reapplying it; changed payloads return `409 OPERATION_CONFLICT`. An old replay cannot overwrite a newer action. `contribution` replaces the actor's total for that occurrence; it is not an increment. Non-savings plans cannot receive a nonzero contribution. Progress is self-reported; the app does not hold or transfer money.
 
 Nudges require current friendship and shared membership, today's occurrence, an incomplete recipient, enabled friend reminders and time outside quiet hours. Cooldown is 24 hours per sender, recipient, plan and occurrence. Success means queued, not guaranteed device delivery.
+
+## Meetings and proposed places
+
+Named one-time meetings use the existing plan model with `kind: "event"` and `cadence: "once"`. They retain the same membership, friend-invitation, offline creation and authorization rules. The title (for example, Football) and the place label (for example, School football field) are separate fields.
+
+| Method and path                     | Request                                               | Response                                                   |
+| ----------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------- |
+| `GET /api/meetings?from=YYYY-MM-DD` | Optional date, default today in the account time zone | `{meetings:Plan[]}`; at most 50 upcoming one-time meetings |
+| `GET /api/plans/:id/places`         | None                                                  | `MeetingPlaces`                                            |
+| `POST /api/plans/:id/places`        | `{operationId:UUID,place:Place}`                      | `MeetingPlaces`; 201 first creation, 200 identical retry   |
+| `PUT /api/plans/:id/place-vote`     | `{optionId:UUID}` or `{optionId:null}` to withdraw    | `{ok:true}`                                                |
+| `POST /api/plans/:id/place-confirm` | `{optionId:UUID,version:number}`                      | `{plan:Plan}`                                              |
+
+`MeetingPlaces` contains `planVersion` and `options`. Each option contains `id`, `planId`, `proposedBy`, `proposerName`, `place`, `voterIds` and `createdAt`. Only current members can see proposals and voters. The upcoming list uses each meeting's actual date for attendance, rather than today's date, and orders by date, time and ID. Recurring events continue to appear in the daily plan view.
+
+Each member may propose at most three places, with a maximum of 24 per meeting. Keep the same `operationId` when retrying a proposal: changed content under an existing ID is rejected. Each member has one vote per meeting, which can be moved or withdrawn. A vote cannot target another meeting's option or impersonate another participant. Removing membership cascades its proposals and votes.
+
+The organizer chooses a proposed location using the current version; votes inform that decision and do not automatically finalize it. Adopting a different place updates the meeting and resets attendance for reconfirmation. Someone else's vote or response cannot be edited by the organizer. Proposals, voting and finalization require a connection; a new meeting can use the existing offline creation queue. A place initially picked by the organizer is valid without creating a poll option.
 
 ## Notifications
 
@@ -76,11 +96,19 @@ Each scheduler invocation queues at most five due plans and processes at most th
 
 `GET /api/export?limit=1000&cursor=OPAQUE` exports the caller's data. `limit` must be 1–1,000 and defaults to 1,000. Omit `cursor` initially and pass returned cursors unchanged.
 
-First page: `{exportedAt,profile,plans,friendships,checkins,nextCursor,limits:{pageSize}}`.
+First page: `{exportedAt,profile,plans,friendships,meetingPlaces,meetingVotes,meetingResponses,checkins,nextCursor,limits:{pageSize}}`.
 
 Later pages: `{exportedAt,checkins,nextCursor,limits:{pageSize}}`.
 
 Continue until `nextCursor` is `null`; concatenate check-ins and keep first-page metadata. Check-ins contain only the caller's progress, ordered by `occurrence_date DESC, plan_id ASC`. The compound cursor preserves records sharing a date. Plans include those owned by or shared with the caller. Other users' private profiles, emails and device tokens are excluded.
+
+Meeting arrays appear only on the first page and contain the caller's own contributions:
+
+- `meetingPlaces`: `{id,plan_id,place_json,created_at}` for places proposed by the caller. `place_json` is serialized `Place` JSON, consistent with exported plan rows.
+- `meetingVotes`: `{plan_id,option_id,updated_at}` for the caller's current votes.
+- `meetingResponses`: `{plan_id,occurrence_date,status,updated_at}` for the caller's responses to the current occurrence of one-time events. This is not a recurring-event attendance history export.
+
+The active-plan and proposal limits bound these arrays to 600 places, 200 votes and 200 responses. Other participants' proposals, votes and attendance records are not included in these arrays.
 
 Cursors are bounded, validated base64url date/plan-ID tuples. They confer no authority: every page applies the caller's UID filter. Pages are live reads, not a frozen snapshot; concurrent edits can affect export consistency. The frontend must show an explicit error if its memory/page guard is reached instead of downloading silently truncated data.
 
@@ -90,4 +118,4 @@ Production limits are 180 requests per minute per hashed edge IP and 90 per minu
 
 Common codes include `AUTH_REQUIRED`, `AUTH_INVALID`, `AUTH_REVOKED`, `EMAIL_NOT_VERIFIED`, `AUTH_UNAVAILABLE`, `ACCOUNT_DELETED`, `AUTH_DELETE_PENDING`, `RECENT_LOGIN_REQUIRED`, `INVALID_INPUT`, `INVALID_CURSOR`, `BODY_TOO_LARGE`, `PLAN_NOT_FOUND`, `OWNER_REQUIRED`, `VERSION_CONFLICT`, `OPERATION_CONFLICT`, `INVITE_EXPIRED`, `MEMBER_NOT_FRIEND`, `PLAN_LIMIT`, `FRIEND_LIMIT`, `INVITATION_LIMIT`, `DEVICE_LIMIT`, `TOKEN_CONFLICT`, `NUDGE_COOLDOWN`, `QUIET_HOURS`, `ALREADY_COMPLETED`. Unknown errors must remain visible and must not silently discard offline changes.
 
-Local tests cover real D1 migrations, multi-user permissions, concurrent mutations, recurrence, invitation consumption, export pagination, device limits and delivery failures. Live Firebase/FCM, deployed D1, real-device PWA behavior and Cloudflare CPU profiling still require verification using configured production accounts. Exact notification timing and unlimited free capacity are not guaranteed.
+Local tests cover real D1 migrations, multi-user permissions, concurrent mutations, recurrence, invitation consumption, export pagination, device limits and delivery failures. The [release verification record](RELEASE.md) documents live identity/API/browser checks and outstanding physical-device notification and operational checks. Exact notification timing and unlimited free capacity are not guaranteed.

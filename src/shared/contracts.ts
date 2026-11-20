@@ -62,6 +62,19 @@ export interface Plan extends PlanInput {
   createdAt: string;
   updatedAt: string;
 }
+export interface MeetingPlaceOption {
+  id: string;
+  planId: string;
+  proposedBy: string;
+  proposerName: string;
+  place: Place;
+  voterIds: string[];
+  createdAt: string;
+}
+export interface MeetingPlaces {
+  planVersion: number;
+  options: MeetingPlaceOption[];
+}
 export interface AppNotification {
   id: string;
   planId: string | null;

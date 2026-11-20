@@ -89,6 +89,7 @@ describe('private offline state', () => {
         profile: profile(uid),
         friends: [],
         plans: [plan],
+        meetings: [{ ...plan, id: `meeting-${uid}`, kind: 'event', cadence: 'once' }],
         date: plan.date,
         savedAt: 1,
       });
@@ -99,9 +100,11 @@ describe('private offline state', () => {
       });
     }
     expect((await loadSnapshot('bob'))?.profile.uid).toBe('bob');
+    expect((await loadSnapshot('bob'))?.meetings?.map((item) => item.id)).toEqual(['meeting-bob']);
     expect(await loadSnapshot('eve')).toBeUndefined();
     await clearPrivateData('alice');
     expect(await loadSnapshot('alice')).toBeUndefined();
+    expect((await loadSnapshot('bob'))?.meetings?.map((item) => item.id)).toEqual(['meeting-bob']);
     expect(await pendingCheckins('alice')).toEqual([]);
     expect((await pendingCheckins('bob')).length).toBe(1);
     expect((await loadSnapshot('bob'))?.profile.uid).toBe('bob');

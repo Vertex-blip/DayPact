@@ -249,6 +249,7 @@ try {
     let result;
     if (pathname === '/api/me' && method === 'GET') result = { profile };
     else if (pathname === '/api/friends') result = { friends: [friend] };
+    else if (pathname === '/api/meetings') result = { meetings: [] };
     else if (pathname === '/api/plans' && method === 'GET')
       result = { plans: plans(url.searchParams.get('date')) };
     else if (pathname === '/api/notifications') result = { notifications: [] };

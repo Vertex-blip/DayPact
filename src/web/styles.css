@@ -1313,6 +1313,337 @@ a {
   position: relative;
   overflow: hidden;
 }
+.meetings-overview {
+  margin: 22px 20px 26px;
+}
+.meetings-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.meetings-section-head h2 {
+  font-size: 20px;
+  margin: 0 0 4px;
+}
+.meetings-section-head p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  margin: 0;
+}
+.meeting-create-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 42px;
+  flex-shrink: 0;
+  padding: 8px 12px;
+  border-radius: 12px;
+  color: var(--blue);
+  background: var(--surface2);
+  font-weight: 600;
+}
+.meetings-empty {
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  padding: 17px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.upcoming-meetings {
+  display: grid;
+  gap: 9px;
+}
+.meeting-list {
+  margin-top: 18px;
+}
+.meeting-card {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  color: var(--text);
+  text-align: left;
+}
+.meeting-card > svg {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.meeting-date {
+  width: 45px;
+  min-width: 45px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 9px 3px;
+  border-radius: 10px;
+  background: var(--surface2);
+}
+.meeting-date b {
+  font-size: 22px;
+  line-height: 1;
+  font-weight: 650;
+}
+.meeting-date small {
+  color: var(--muted);
+  font-size: 9px;
+  margin-top: 5px;
+  max-width: 100%;
+  overflow: hidden;
+}
+.meeting-card-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.meeting-card-copy > b {
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.meeting-card-copy > span {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.meeting-card-copy small {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--blue);
+  font-size: 11px;
+}
+.meeting-card-copy svg {
+  vertical-align: -2px;
+}
+.friends-meeting-button {
+  margin: 0 20px 18px;
+  width: calc(100% - 40px);
+}
+.meeting-editor-intro {
+  margin: 0;
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.meeting-heading-meta {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 14px;
+  margin-bottom: 18px;
+}
+.meeting-heading-meta span {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+}
+.meeting-response {
+  background: var(--surface2);
+  border-radius: 14px;
+  padding: 15px;
+  margin: 15px 0 20px;
+}
+.meeting-response .group-caption,
+.meeting-current-place .group-caption {
+  display: block;
+  padding: 0;
+  margin: 0 0 11px;
+}
+.meeting-response-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.meeting-response-buttons .secondary {
+  font-size: 14px;
+  min-height: 45px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+.meeting-response-buttons .selected-response {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.meeting-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 13px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.meeting-counts b {
+  color: var(--text);
+  margin-right: 3px;
+}
+.meeting-current-place {
+  margin: 20px 0 10px;
+}
+.meeting-place-button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 12px;
+  text-align: left;
+  background: var(--surface2);
+  border-radius: 12px;
+  padding: 14px;
+  color: var(--blue);
+}
+.meeting-place-button > span {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 5px;
+}
+.meeting-place-button b {
+  color: var(--text);
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+.meeting-place-button small {
+  font-size: 12px;
+}
+.meeting-place-button > svg {
+  flex-shrink: 0;
+}
+.meeting-members .detail-member:last-child {
+  border-bottom: 0;
+}
+.meeting-places {
+  border-top: 1px solid var(--line);
+  margin-top: 20px;
+  padding-top: 20px;
+}
+.meeting-places h3 {
+  font-size: 17px;
+  margin: 0 0 8px;
+}
+.meeting-panel-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+.meeting-panel-heading .text-button {
+  font-size: 12px;
+  min-height: 40px;
+  flex-shrink: 0;
+}
+.meeting-places > .secondary {
+  margin-top: 13px;
+}
+.meeting-proposal-draft {
+  display: grid;
+  gap: 12px;
+  background: var(--surface2);
+  border: 1px solid var(--accent);
+  border-radius: 13px;
+  padding: 14px;
+  margin: 15px 0;
+}
+.meeting-proposal-draft > b {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.meeting-proposal-draft > b svg {
+  flex-shrink: 0;
+}
+.meeting-proposal-draft .primary,
+.meeting-proposal-draft .secondary {
+  font-size: 12px;
+  min-height: 42px;
+  padding: 8px;
+}
+.meeting-option {
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+}
+.meeting-option .card-kicker {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  margin-bottom: 9px;
+}
+.meeting-option-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: none;
+  padding: 0;
+  margin-bottom: 8px;
+  text-align: left;
+  width: 100%;
+  color: var(--text);
+  font-size: 14px;
+}
+.meeting-option-title svg {
+  color: var(--blue);
+  flex-shrink: 0;
+}
+.meeting-option-title b {
+  overflow-wrap: anywhere;
+}
+.meeting-option > small {
+  font-size: 11px;
+}
+.meeting-option-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.meeting-option-footer .text-button {
+  font-size: 12px;
+  min-height: 40px;
+}
+.meeting-vote {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 40px;
+  background: var(--surface2);
+  border-radius: 9px;
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.meeting-vote.voted {
+  color: var(--blue);
+  outline: 1px solid var(--blue);
+  outline-offset: -1px;
+}
+.meeting-detail-actions {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
 .app-shell-map {
   display: flex;
   flex-direction: column;

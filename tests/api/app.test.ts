@@ -7,7 +7,7 @@ import type { Env, Identity } from '../../src/api/types';
 import { HttpError } from '../../src/api/types';
 import { enqueueDueReminders } from '../../src/api/domain/reminders';
 import { DEFAULT_SETTINGS, type Plan, type PlanInput } from '../../src/shared/contracts';
-import { localParts } from '../../src/api/domain/dates';
+import { localParts, addDays } from '../../src/api/domain/dates';
 
 vi.mock('../../src/api/auth', () => ({
   authenticate: async () => {
@@ -95,7 +95,9 @@ beforeAll(async () => {
     }),
   );
   const db = (await mf.getD1Database('DB')) as unknown as D1Database;
-  const sql = readFileSync(new URL('../../migrations/0001_initial.sql', import.meta.url), 'utf8');
+  const sql = ['0001_initial.sql', '0002_meetings.sql']
+    .map((name) => readFileSync(new URL(`../../migrations/${name}`, import.meta.url), 'utf8'))
+    .join('\n');
   // D1 exec accepts a line per statement; keep CREATE TRIGGER blocks intact.
   const statements: string[] = [];
   let current = '';
@@ -130,6 +132,351 @@ beforeEach(async () => {
 });
 afterAll(async () => {
   await mf?.dispose();
+});
+
+describe('meeting coordination', () => {
+  const field = { lat: 51.128, lng: 71.431, label: 'Футбол алаңы' };
+  const park = { lat: 51.131, lng: 71.426, label: 'Саябақ' };
+  const meeting = (changes: Partial<PlanInput> = {}) =>
+    plan('alice', { kind: 'event', cadence: 'once', ...changes });
+  const propose = (uid: string, id: string, place = field, operationId = crypto.randomUUID()) =>
+    json(uid, `/plans/${id}/places`, 'POST', { operationId, place });
+  const answer = (
+    uid: string,
+    p: Plan,
+    status = 'accepted',
+    version = p.version,
+    date = p.startDate,
+  ) => json(uid, `/plans/${p.id}/rsvp`, 'POST', { date, status, version });
+
+  it('lists only member meetings in date order with responses for each event date', async () => {
+    await befriend('alice', 'bob');
+    const later = await meeting({
+      startDate: addDays(today(), 3),
+      memberIds: ['bob'],
+      time: '12:00',
+    });
+    const sooner = await meeting({
+      startDate: addDays(today(), 1),
+      memberIds: ['bob'],
+      time: '14:00',
+    });
+    await meeting({ startDate: addDays(today(), -1), memberIds: ['bob'] });
+    await meeting({ startDate: today() });
+    await plan('alice', { kind: 'event', cadence: 'daily', memberIds: ['bob'] });
+    expect((await answer('bob', later)).status).toBe(200);
+    const list = await json('bob', `/meetings?from=${today()}`);
+    expect(list.status).toBe(200);
+    expect(list.data.meetings.map((p: Plan) => p.id)).toEqual([sooner.id, later.id]);
+    expect(list.data.meetings[0].members.find((m: any) => m.uid === 'bob').rsvp).toBe('pending');
+    expect(list.data.meetings[1].members.find((m: any) => m.uid === 'bob').rsvp).toBe('accepted');
+    expect((await json('mallory', '/meetings')).data.meetings).toEqual([]);
+    expect((await json('bob', '/meetings?from=2026-02-30')).status).toBe(400);
+  });
+
+  it('denies outsider access and privilege fields and keeps confirmation owner-only', async () => {
+    await befriend('alice', 'bob');
+    const p = await meeting({ memberIds: ['bob'] });
+    const made = await propose('bob', p.id);
+    const optionId = made.data.options[0].id;
+    expect(made.status).toBe(201);
+    expect((await json('mallory', `/plans/${p.id}/places`)).status).toBe(404);
+    expect((await propose('mallory', p.id)).status).toBe(404);
+    expect((await json('mallory', `/plans/${p.id}/place-vote`, 'PUT', { optionId })).status).toBe(
+      404,
+    );
+    expect(
+      (await json('bob', `/plans/${p.id}/place-confirm`, 'POST', { optionId, version: 1 })).status,
+    ).toBe(403);
+    expect(
+      (
+        await json('bob', `/plans/${p.id}/places`, 'POST', {
+          place: field,
+          operationId: crypto.randomUUID(),
+          proposedBy: 'alice',
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (await json('bob', `/plans/${p.id}/place-vote`, 'PUT', { optionId, userId: 'alice' })).status,
+    ).toBe(400);
+    expect(JSON.stringify(made.data)).not.toContain('@example.test');
+    expect((await propose('alice', p.id, { ...field, lat: 91 })).status).toBe(400);
+    expect((await propose('alice', p.id, { ...field, label: ' ' })).status).toBe(400);
+  });
+
+  it('creates a proposal once under concurrent retries and rejects changed or cross-actor reuse', async () => {
+    await befriend('alice', 'bob');
+    const p = await meeting({ memberIds: ['bob'] });
+    const id = crypto.randomUUID();
+    const results = await Promise.all([
+      propose('alice', p.id, field, id),
+      propose('alice', p.id, field, id),
+    ]);
+    expect(results.map((r) => r.status).sort()).toEqual([200, 201]);
+    expect((await json('alice', `/plans/${p.id}/places`)).data.options).toHaveLength(1);
+    expect((await propose('alice', p.id, park, id)).status).toBe(409);
+    expect((await propose('bob', p.id, field, id)).status).toBe(409);
+    const other = await meeting();
+    expect((await propose('alice', other.id, field, id)).status).toBe(409);
+    expect((await json('alice', `/plans/${other.id}/places`)).data.options).toHaveLength(0);
+  });
+
+  it('allows one own vote, changing and withdrawing it, and rejects another meeting option', async () => {
+    await befriend('alice', 'bob');
+    const p = await meeting({ memberIds: ['bob'] });
+    const first = (await propose('alice', p.id)).data.options[0].id;
+    const second = crypto.randomUUID();
+    await propose('bob', p.id, park, second);
+    for (const optionId of [first, first, second])
+      expect((await json('bob', `/plans/${p.id}/place-vote`, 'PUT', { optionId })).status).toBe(
+        200,
+      );
+    const options = (await json('alice', `/plans/${p.id}/places`)).data.options;
+    expect(options.find((o: any) => o.id === first).voterIds).toEqual([]);
+    expect(options.find((o: any) => o.id === second).voterIds).toEqual(['bob']);
+    const other = await meeting();
+    const foreign = (await propose('alice', other.id)).data.options[0].id;
+    expect(
+      (await json('bob', `/plans/${p.id}/place-vote`, 'PUT', { optionId: foreign })).status,
+    ).toBe(404);
+    expect((await json('bob', `/plans/${p.id}/place-vote`, 'PUT', { optionId: null })).status).toBe(
+      200,
+    );
+    expect(
+      (await json('alice', `/plans/${p.id}/places`)).data.options.every(
+        (o: any) => o.voterIds.length === 0,
+      ),
+    ).toBe(true);
+  });
+
+  it('confirms an owner choice, resets obsolete responses and rejects stale attendance', async () => {
+    await befriend('alice', 'bob');
+    const p = await meeting({ memberIds: ['bob'], place: field });
+    const optionId = (await propose('bob', p.id, park)).data.options[0].id;
+    expect((await answer('bob', p)).status).toBe(200);
+    const confirmed = await json('alice', `/plans/${p.id}/place-confirm`, 'POST', {
+      optionId,
+      version: 1,
+    });
+    expect(confirmed.status).toBe(200);
+    expect(confirmed.data.plan.place).toEqual(park);
+    expect(confirmed.data.plan.version).toBe(2);
+    expect(confirmed.data.plan.members.every((m: any) => m.rsvp === 'pending')).toBe(true);
+    expect((await answer('bob', p)).status).toBe(409);
+    expect((await answer('bob', confirmed.data.plan)).status).toBe(200);
+    expect(
+      (await json('alice', `/plans/${p.id}/place-confirm`, 'POST', { optionId, version: 1 }))
+        .status,
+    ).toBe(409);
+    const unchangedPlace = await json('alice', `/plans/${p.id}/place-confirm`, 'POST', {
+      optionId,
+      version: 2,
+    });
+    expect(unchangedPlace.status).toBe(200);
+    expect(unchangedPlace.data.plan.members.find((m: any) => m.uid === 'bob').rsvp).toBe(
+      'accepted',
+    );
+    expect(
+      (await json('bob', `/plans/${p.id}/rsvp`, 'POST', { date: p.date, status: 'accepted' }))
+        .status,
+    ).toBe(409);
+  });
+
+  it.each([
+    { time: '20:00' },
+    { timeZone: 'UTC' },
+    { startDate: '2099-03-21' },
+    { place: park },
+    { cadence: 'weekly' as const },
+  ])('clears future attendance atomically for changed meeting details %j', async (change) => {
+    const p = await meeting({ place: field });
+    await answer('alice', p);
+    const edited = await json('alice', `/plans/${p.id}`, 'PATCH', { version: 1, ...change });
+    expect(edited.status).toBe(200);
+    expect(
+      (
+        await env.DB.prepare('SELECT count(*) AS n FROM rsvps WHERE plan_id=?')
+          .bind(p.id)
+          .first<{ n: number }>()
+      )?.n,
+    ).toBe(0);
+  });
+
+  it('keeps responses after a title-only edit and prevents stale patches from erasing them', async () => {
+    const p = await meeting();
+    await answer('alice', p);
+    expect(
+      (await json('alice', `/plans/${p.id}`, 'PATCH', { version: 1, title: 'Футбол' })).status,
+    ).toBe(200);
+    expect(
+      (await json('alice', `/plans/${p.id}`, 'PATCH', { version: 1, time: '21:00' })).status,
+    ).toBe(409);
+    expect(
+      (
+        await env.DB.prepare('SELECT status FROM rsvps WHERE plan_id=?')
+          .bind(p.id)
+          .first<{ status: string }>()
+      )?.status,
+    ).toBe('accepted');
+  });
+
+  it('retains past recurring attendance when changing future timing', async () => {
+    const past = addDays(today(), -1);
+    const p = await meeting({ startDate: past, cadence: 'daily' });
+    await answer('alice', p, 'accepted', p.version, past);
+    await answer('alice', p, 'accepted', p.version, today());
+    expect(
+      (await json('alice', `/plans/${p.id}`, 'PATCH', { version: 1, time: '20:00' })).status,
+    ).toBe(200);
+    const rows = await env.DB.prepare('SELECT occurrence_date FROM rsvps WHERE plan_id=?')
+      .bind(p.id)
+      .all<{ occurrence_date: string }>();
+    expect(rows.results.map((r) => r.occurrence_date)).toEqual([past]);
+  });
+
+  it('never leaves an old RSVP accepted when confirmation races with the response', async () => {
+    await befriend('alice', 'bob');
+    const p = await meeting({ memberIds: ['bob'], place: field });
+    const optionId = (await propose('bob', p.id, park)).data.options[0].id;
+    const [confirmed, responded] = await Promise.all([
+      json('alice', `/plans/${p.id}/place-confirm`, 'POST', { optionId, version: 1 }),
+      answer('bob', p),
+    ]);
+    expect(confirmed.status).toBe(200);
+    expect([200, 409]).toContain(responded.status);
+    expect(
+      (
+        await env.DB.prepare('SELECT count(*) AS n FROM rsvps WHERE plan_id=?')
+          .bind(p.id)
+          .first<{ n: number }>()
+      )?.n,
+    ).toBe(0);
+  });
+
+  it('cascades proposals and votes when a member leaves and does not resurrect a replay after reinviting', async () => {
+    await befriend('alice', 'bob');
+    const p = await meeting({ memberIds: ['bob'] });
+    const operationId = crypto.randomUUID();
+    await propose('bob', p.id, field, operationId);
+    await json('alice', `/plans/${p.id}/place-vote`, 'PUT', { optionId: operationId });
+    expect((await json('alice', '/friends/bob', 'DELETE')).status).toBe(200);
+    expect((await json('bob', `/plans/${p.id}/places`)).status).toBe(404);
+    expect((await json('alice', `/plans/${p.id}/places`)).data.options).toEqual([]);
+    expect(
+      (await env.DB.prepare('SELECT count(*) AS n FROM meeting_place_votes').first<{ n: number }>())
+        ?.n,
+    ).toBe(0);
+    await befriend('alice', 'bob');
+    expect(
+      (await json('alice', `/plans/${p.id}`, 'PATCH', { version: 1, memberIds: ['bob'] })).status,
+    ).toBe(200);
+    expect((await propose('bob', p.id, field, operationId)).status).toBe(404);
+    expect((await json('alice', `/plans/${p.id}/places`)).data.options).toEqual([]);
+  });
+
+  it('clears meeting coordination when changing the plan kind and rejects non-meeting operations', async () => {
+    const p = await meeting();
+    const optionId = (await propose('alice', p.id)).data.options[0].id;
+    await json('alice', `/plans/${p.id}/place-vote`, 'PUT', { optionId });
+    expect(
+      (await json('alice', `/plans/${p.id}`, 'PATCH', { version: 1, kind: 'habit' })).status,
+    ).toBe(200);
+    expect((await json('alice', `/plans/${p.id}/places`)).status).toBe(400);
+    expect((await answer('alice', { ...p, version: 2 })).status).toBe(400);
+    expect(
+      (await env.DB.prepare('SELECT count(*) AS n FROM meeting_places').first<{ n: number }>())?.n,
+    ).toBe(0);
+    expect(
+      (await env.DB.prepare('SELECT count(*) AS n FROM meeting_place_votes').first<{ n: number }>())
+        ?.n,
+    ).toBe(0);
+  });
+
+  it('enforces concurrent member and total proposal limits without consuming rejected operation IDs', async () => {
+    const members = Array.from({ length: 8 }, (_, i) => `member${i}`);
+    await call('alice', '/me');
+    await Promise.all(members.map((uid) => call(uid, '/me')));
+    await env.DB.batch(
+      members.map((uid) =>
+        env.DB.prepare('INSERT INTO friendships(user_low,user_high,created_at) VALUES(?,?,?)').bind(
+          'alice',
+          uid,
+          new Date().toISOString(),
+        ),
+      ),
+    );
+    const p = await meeting({ memberIds: members });
+    const own = await Promise.all(Array.from({ length: 4 }, () => propose('alice', p.id)));
+    expect(own.filter((r) => r.status === 201)).toHaveLength(3);
+    expect(own.filter((r) => r.status === 409 && r.data.error.code === 'PLACE_LIMIT')).toHaveLength(
+      1,
+    );
+    const rest = await Promise.all(
+      members.slice(0, 7).flatMap((uid) => Array.from({ length: 3 }, () => propose(uid, p.id))),
+    );
+    expect(rest.every((r) => r.status === 201)).toBe(true);
+    const operationId = crypto.randomUUID();
+    expect((await propose(members[7], p.id, field, operationId)).data.error.code).toBe(
+      'PLACE_LIMIT',
+    );
+    expect((await json('alice', `/plans/${p.id}/places`)).data.options).toHaveLength(24);
+    expect(
+      await env.DB.prepare(
+        'SELECT 1 FROM meeting_place_operations WHERE user_id=? AND operation_id=?',
+      )
+        .bind(members[7], operationId)
+        .first(),
+    ).toBeNull();
+  }, 20000);
+  it('bounds upcoming results to the nearest fifty using a constant number of database queries', async () => {
+    const seed = await meeting();
+    const ids = Array.from({ length: 53 }, () => crypto.randomUUID());
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO plans(id,owner_id,title,description,kind,cadence,start_date,time,time_zone,remind_minutes,mutation_id,created_at,updated_at)
+        SELECT j.value,p.owner_id,p.title,p.description,p.kind,p.cadence,p.start_date,p.time,p.time_zone,p.remind_minutes,j.value,p.created_at,p.updated_at FROM plans p,json_each(?) j WHERE p.id=?`,
+      ).bind(JSON.stringify(ids), seed.id),
+      env.DB.prepare(
+        'INSERT INTO plan_members(plan_id,user_id,joined_at) SELECT value,?,? FROM json_each(?)',
+      ).bind('alice', new Date().toISOString(), JSON.stringify(ids)),
+    ]);
+    const list = await json('alice', '/meetings');
+    expect(list.status).toBe(200);
+    expect(list.data.meetings.map((p: Plan) => p.id)).toEqual(
+      [seed.id, ...ids].sort().slice(0, 50),
+    );
+    expect(
+      list.data.meetings.every((p: Plan) => p.members.length === 1 && p.members[0].uid === 'alice'),
+    ).toBe(true);
+  });
+
+  it('exports only the callers own meeting contributions and deletes new records with the account', async () => {
+    await befriend('alice', 'bob');
+    const p = await meeting({ memberIds: ['bob'] });
+    const ownId = (await propose('alice', p.id, field)).data.options[0].id;
+    const bobId = crypto.randomUUID();
+    await propose('bob', p.id, park, bobId);
+    await json('alice', `/plans/${p.id}/place-vote`, 'PUT', { optionId: bobId });
+    await json('bob', `/plans/${p.id}/place-vote`, 'PUT', { optionId: ownId });
+    await answer('alice', p);
+    await answer('bob', p, 'declined');
+    const exported = (await json('bob', '/export')).data;
+    expect(exported.meetingPlaces.map((o: any) => o.id)).toEqual([bobId]);
+    expect(exported.meetingVotes.map((v: any) => v.option_id)).toEqual([ownId]);
+    expect(exported.meetingResponses.map((r: any) => r.status)).toEqual(['declined']);
+    expect((await json('bob', '/me', 'DELETE')).status).toBe(200);
+    const remaining = await json('alice', `/plans/${p.id}/places`);
+    expect(remaining.data.options.map((o: any) => o.id)).toEqual([ownId]);
+    expect(remaining.data.options[0].voterIds).toEqual([]);
+    expect(
+      (
+        await env.DB.prepare('SELECT count(*) AS n FROM meeting_place_operations WHERE user_id=?')
+          .bind('bob')
+          .first<{ n: number }>()
+      )?.n,
+    ).toBe(0);
+  });
 });
 
 describe('identity and validation', () => {
