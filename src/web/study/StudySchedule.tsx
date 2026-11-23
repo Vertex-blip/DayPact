@@ -227,7 +227,7 @@ function DayNotice({ data, date, locale }: { data: StudyData; date: string; loca
   return null;
 }
 
-/** Every known lesson is visible immediately; no accordion state or extra network request. */
+/** Campus timetable matrix: the normal week fits a phone without expanding any day. */
 export function StudyFullWeek({
   data,
   date,
@@ -247,79 +247,85 @@ export function StudyFullWeek({
 }) {
   const t = studyTexts(locale),
     today = studyLocalParts(now, data.term.timeZone).date;
-  return (
-    <div className="study-full-schedule" data-testid="study-full-schedule">
-      <div className="study-section-heading">
-        <h2>{t.fullSchedule}</h2>
-      </div>
-      <div className="study-full-list">
-        {studyWeekDates(date).map((day) => {
-          const weekday = studyWeekday(day),
-            state = studyDayState(data, day),
-            items = studyOccurrences(data, day);
-          const groups = studyGroupOccurrences(items),
-            count = items.filter((item) => !item.cancelled).length;
-          const partial =
-            state.withinTerm && !state.suppressed
-              ? data.term.incompleteDays.find((item) => item.weekday === weekday)
-              : undefined;
-          return (
-            <section className={`study-full-day ${day === today ? 'is-today' : ''}`} key={day}>
-              <header>
-                <h3>
-                  {studyWeekNames(locale)[weekday - 1]}
-                  {day === today && <small>{t.today}</small>}
-                </h3>
-                <span>{studyDateLabel(day, locale)}</span>
-              </header>
-              <DayNotice data={data} date={day} locale={locale} />
-              {groups.length > 0 ? (
-                <div className="study-full-rows">
-                  {groups.map((group) => (
-                    <button
-                      className={`study-full-row ${group.cancelled ? 'is-cancelled' : ''}`}
-                      key={group.id}
-                      onClick={() => onOpen(group)}
-                    >
-                      <span className="study-full-time">
-                        <strong>{group.startTime}</strong>
-                        <span>{group.endTime}</span>
-                      </span>
-                      <span className="study-full-subject">
-                        <strong>{group.title}</strong>
-                        <span>
-                          {t[group.kind]}
-                          {group.count > 1 ? ` · ${group.count} ${t.lessons}` : ''}
-                          {group.modified ? ` · ${group.cancelled ? t.cancelled : t.changed}` : ''}
-                        </span>
-                      </span>
-                      <span
-                        className={`study-full-room ${group.format === 'online' ? 'is-online' : ''}`}
-                      >
-                        {group.format === 'online' ? t.onlineFormat : group.room || t.roomMissing}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              ) : !partial && !state.suppressed ? (
-                <p className="study-full-empty">{t.noLessons}</p>
-              ) : null}
-              {partial && (
-                <IncompleteNotice
-                  value={partial}
-                  locale={locale}
-                  editable={editable}
-                  onEdit={() => onIncomplete(partial)}
-                />
-              )}
-              {count > 0 && !partial && (
-                <span className="study-full-count">
-                  {count} {t.lessons}
+  const days = studyWeekDates(date);
+  const renderDay = (day: string) => {
+    const weekday = studyWeekday(day),
+      state = studyDayState(data, day),
+      items = studyOccurrences(data, day).filter((item) => item.format !== 'online');
+    const groups = studyGroupOccurrences(items);
+    const partial =
+      state.withinTerm && !state.suppressed
+        ? data.term.incompleteDays.find((item) => item.weekday === weekday)
+        : undefined;
+    return (
+      <section className={`study-full-day ${day === today ? 'is-today' : ''}`} key={day}>
+        <header>
+          <h3>
+            {studyWeekNames(locale)[weekday - 1]}
+            {day === today && <small>{t.today}</small>}
+          </h3>
+          <span>
+            {day.slice(8, 10)}.{day.slice(5, 7)}
+          </span>
+        </header>
+        <DayNotice data={data} date={day} locale={locale} />
+        {groups.length > 0 ? (
+          <div className="study-full-rows">
+            {groups.map((group) => (
+              <button
+                className={`study-full-row ${group.cancelled ? 'is-cancelled' : ''}`}
+                key={group.id}
+                onClick={() => onOpen(group)}
+              >
+                <strong className="study-full-subject" title={group.title}>
+                  {group.title}
+                </strong>
+                <span className="study-full-location">
+                  <span className="study-full-time">
+                    {group.startTime}–{group.endTime}
+                  </span>
+                  <strong className="study-full-room">{group.room || t.roomMissing}</strong>
                 </span>
-              )}
-            </section>
-          );
-        })}
+                {group.modified && (
+                  <span className="study-full-modified">
+                    {group.cancelled ? t.cancelled : t.changed}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        ) : !partial && !state.suppressed ? (
+          <p className="study-full-empty">{t.noLessons}</p>
+        ) : null}
+        {partial && (
+          <button
+            className="study-full-partial"
+            title={partial.note}
+            disabled={!editable}
+            onClick={() => onIncomplete(partial)}
+          >
+            <TriangleAlert size={12} />
+            <span>
+              {groups.length
+                ? t.incompleteCompact
+                : partial.firstTime
+                  ? `${partial.firstTime} · ${t.incompleteCompact}`
+                  : t.unknownSchedule}
+            </span>
+          </button>
+        )}
+      </section>
+    );
+  };
+  return (
+    <div
+      className="study-full-schedule"
+      data-testid="study-full-schedule"
+      aria-label={t.fullSchedule}
+    >
+      <div className="study-full-list">
+        {days.slice(0, 5).map(renderDay)}
+        <div className="study-full-weekend">{days.slice(5).map(renderDay)}</div>
       </div>
     </div>
   );
@@ -529,17 +535,21 @@ export function StudySearch({
   query,
   locale,
   onOpen,
+  includeOnline = true,
 }: {
   data: StudyData;
   date: string;
   query: string;
   locale: Locale;
   onOpen: (group: StudyOccurrenceGroup) => void;
+  includeOnline?: boolean;
 }) {
   const t = studyTexts(locale),
     items = studyWeekDates(date)
       .flatMap((day) => studyOccurrences(data, day))
-      .filter((item) => studyMatchesQuery(item, query));
+      .filter(
+        (item) => (includeOnline || item.format !== 'online') && studyMatchesQuery(item, query),
+      );
   return (
     <>
       <p className="study-search-note">{t.searchNote}</p>

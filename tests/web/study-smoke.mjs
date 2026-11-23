@@ -46,7 +46,7 @@ window.__testUid='study-fixture-user';
 activatePrivateSession(window.__testUid);
 let props={uid:window.__testUid,locale:'kk',online:true};
 const root=ReactDOM.createRoot(document.getElementById('root'));
-function render(){root.render(React.createElement(React.StrictMode,null,React.createElement('main',{className:'app-shell'},React.createElement(StudyScreen,{...props,onAuthError:()=>{window.__authErrors=(window.__authErrors??0)+1;}}))));}
+function render(){root.render(React.createElement(React.StrictMode,null,React.createElement('main',{className:'app-shell'},React.createElement(StudyScreen,{...props,onAuthError:()=>{window.__authErrors=(window.__authErrors??0)+1;}}),React.createElement('nav',{className:'bottom-nav','aria-label':'Test navigation'},['Бүгін','Карта','Достар','Оқу','Профиль'].map(label=>React.createElement('span',{className:'nav-item',key:label},label))))));}
 window.studyHarness={setProps(p){props={...props,...p};render();},async paused(){return isPrivateSessionPaused(props.uid);},async cached(){return loadStudyCache(props.uid);},unmount(){root.unmount();}};
 render();`,
   }),
@@ -96,6 +96,24 @@ const noOverflow = async () =>
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
+const fitsOneScreen = async () => {
+  const metrics = await page.evaluate(() => ({
+    scroll: document.documentElement.scrollHeight,
+    height: innerHeight,
+    navTop: document.querySelector('.bottom-nav').getBoundingClientRect().top,
+    bottom: Math.max(
+      ...[...document.querySelectorAll('.study-full-day,.study-full-row')].map(
+        (node) => node.getBoundingClientRect().bottom,
+      ),
+    ),
+    clipped: [...document.querySelectorAll('.study-full-room,.study-full-time')].some(
+      (node) => node.scrollWidth > node.clientWidth + 1,
+    ),
+  }));
+  expect(metrics.scroll).toBeLessThanOrEqual(metrics.height + 2);
+  expect(metrics.bottom).toBeLessThanOrEqual(metrics.navTop);
+  expect(metrics.clipped).toBe(false);
+};
 try {
   await page.clock.install({ time: new Date('2026-11-23T09:00:00Z') });
   await page.goto(base);
@@ -105,14 +123,21 @@ try {
     'aria-current',
     'page',
   );
-  for (const title of new Set(doc.lessons.map((item) => item.title)))
+  for (const title of new Set(
+    doc.lessons.filter((item) => item.format !== 'online').map((item) => item.title),
+  ))
     await expect(page.getByTestId('study-full-schedule')).toContainText(title);
-  await expect(page.locator('.study-full-day').first()).toContainText('08:00');
+  await expect(page.locator('.study-full-day').first()).not.toContainText('08:00');
   await expect(page.locator('.study-full-day').first()).toContainText('A1.1.101');
-  await expect(page.locator('.study-full-row')).toHaveCount(14);
-  await page.getByLabel('Пән, кабинет немесе оқытушы').fill('A1.1.808');
+  await expect(page.locator('.study-full-row')).toHaveCount(13);
+  await fitsOneScreen();
+  await page.getByRole('button', { name: 'Пән, кабинет немесе оқытушы', exact: true }).click();
+  await page.locator('.study-search input').fill('Онлайн-курс');
+  await expect(page.locator('.study-lesson')).toHaveCount(0);
+  await page.locator('.study-search input').fill('A1.1.808');
   await expect(page.locator('.study-lesson')).toHaveCount(2);
   await page.getByRole('button', { name: 'Тазарту', exact: true }).click();
+  await page.getByRole('button', { name: 'Пән, кабинет немесе оқытушы', exact: true }).click();
   await expect(page.locator('.study-full-day')).toHaveCount(7);
   const original = structuredClone(doc);
   doc = {
@@ -127,13 +152,28 @@ try {
   await expect(
     page.locator('.study-full-day').first().locator('.study-full-row').first(),
   ).toContainText('13:05');
-  await expect(page.locator('.study-full-day').nth(2)).toContainText('Кесте толық емес');
+  await expect(page.locator('.study-full-day').nth(2)).toContainText('Толық емес');
   await expect(page.locator('.study-full-day').nth(5).locator('.study-full-row')).toHaveCount(0);
   await noOverflow();
-  await page.screenshot({ path: path.join(output, 'full-430-dark.png'), fullPage: true });
+  await fitsOneScreen();
+  await page.screenshot({ path: path.join(output, 'full-430-dark.png'), fullPage: false });
   await page.setViewportSize({ width: 375, height: 812 });
   await noOverflow();
-  await page.screenshot({ path: path.join(output, 'full-375-dark.png'), fullPage: true });
+  await fitsOneScreen();
+  await page.screenshot({ path: path.join(output, 'full-375-dark.png'), fullPage: false });
+  await page.evaluate(() => {
+    document.querySelector('.app-shell').style.paddingTop = '47px';
+    document.documentElement.style.setProperty('--nav-height', '104px');
+  });
+  await fitsOneScreen();
+  await page.screenshot({ path: path.join(output, 'full-375-safe-area.png'), fullPage: false });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await fitsOneScreen();
+  await page.screenshot({ path: path.join(output, 'full-390-safe-area.png'), fullPage: false });
+  await page.evaluate(() => {
+    document.querySelector('.app-shell').style.paddingTop = '';
+    document.documentElement.style.removeProperty('--nav-height');
+  });
   await page.setViewportSize({ width: 320, height: 700 });
   await noOverflow();
   await page.evaluate(() => window.studyHarness.setProps({ locale: 'ru' }));
@@ -144,7 +184,8 @@ try {
   await noOverflow();
   await page.setViewportSize({ width: 375, height: 812 });
   await page.evaluate(() => (document.documentElement.dataset.theme = 'light'));
-  await page.screenshot({ path: path.join(output, 'full-375-light-ru.png'), fullPage: true });
+  await fitsOneScreen();
+  await page.screenshot({ path: path.join(output, 'full-375-light-ru.png'), fullPage: false });
   await page.evaluate(() => {
     window.studyHarness.setProps({ locale: 'kk' });
     document.documentElement.dataset.theme = 'dark';
@@ -153,9 +194,9 @@ try {
   doc = { ...original, version: doc.version + 1 };
   await page.getByRole('button', { name: 'Оқу баптаулары', exact: true }).click();
   await dialog().getByRole('button', { name: 'Жаңарту', exact: true }).click();
-  await expect(page.locator('.study-full-row')).toHaveCount(14);
+  await expect(page.locator('.study-full-row')).toHaveCount(13);
   passed(
-    'Full schedule defaults open: all times/subjects/rooms, search, no-online dataset, 430/375/320px and KK/RU',
+    'One-screen matrix: 13 campus groups, online omitted from mixed input/search, all days/times/rooms fit 375/390 including safe areas',
   );
   await page.getByRole('button', { name: 'Апта', exact: true }).click();
   await expect(page.locator('.study-week-day')).toHaveCount(7);

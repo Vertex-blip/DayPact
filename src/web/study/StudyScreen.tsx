@@ -65,6 +65,7 @@ import {
 } from './StudySchedule';
 import { studyDateLabel, studyTexts, studyWeekNames } from './texts';
 import './study.css';
+import './full.css';
 
 type Panel =
   | { kind: 'settings' }
@@ -111,6 +112,7 @@ export function StudyScreen({ uid, locale, online, initialDate, onAuthError }: P
   const [view, setView] = useState<'full' | 'day' | 'week' | 'calendar'>(
     initialDate && studyValidDate(initialDate) ? 'day' : 'full',
   );
+  const [fullSearchOpen, setFullSearchOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState(
       initialDate && studyValidDate(initialDate) ? initialDate : '',
     ),
@@ -378,7 +380,10 @@ export function StudyScreen({ uid, locale, online, initialDate, onAuthError }: P
   // The parent also unmounts private routes; this prevents a render during an identity transition.
   if (currentAuth()?.currentUser?.uid !== uid) return null;
   return (
-    <section className="study-screen" data-testid="study-screen">
+    <section
+      className={`study-screen ${view === 'full' ? 'is-full' : ''}`}
+      data-testid="study-screen"
+    >
       <header className="study-header">
         <div>
           <h1>{t.title}</h1>
@@ -391,6 +396,19 @@ export function StudyScreen({ uid, locale, online, initialDate, onAuthError }: P
           </p>
         </div>
         <div>
+          {study && view === 'full' && (
+            <button
+              className="study-icon-button"
+              aria-label={t.search}
+              aria-expanded={fullSearchOpen}
+              onClick={() => {
+                setFullSearchOpen((value) => !value);
+                setQuery('');
+              }}
+            >
+              <Search size={19} />
+            </button>
+          )}
           {study && (
             <button
               className="study-icon-button"
@@ -466,6 +484,7 @@ export function StudyScreen({ uid, locale, online, initialDate, onAuthError }: P
                 onClick={() => {
                   setView(tab);
                   setQuery('');
+                  setFullSearchOpen(false);
                 }}
               >
                 {t[tab]}
@@ -530,25 +549,27 @@ export function StudyScreen({ uid, locale, online, initialDate, onAuthError }: P
                   ))}
                 </div>
               )}
-              <div className="study-search">
-                <Search size={19} />
-                <input
-                  aria-label={t.search}
-                  placeholder={t.search}
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  maxLength={120}
-                />
-                {query && (
-                  <button
-                    className="study-icon-button"
-                    aria-label={t.clear}
-                    onClick={() => setQuery('')}
-                  >
-                    <X size={17} />
-                  </button>
-                )}
-              </div>
+              {(view !== 'full' || fullSearchOpen) && (
+                <div className="study-search">
+                  <Search size={19} />
+                  <input
+                    aria-label={t.search}
+                    placeholder={t.search}
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    maxLength={120}
+                  />
+                  {query && (
+                    <button
+                      className="study-icon-button"
+                      aria-label={t.clear}
+                      onClick={() => setQuery('')}
+                    >
+                      <X size={17} />
+                    </button>
+                  )}
+                </div>
+              )}
             </>
           )}
           {query.trim() ? (
@@ -557,6 +578,7 @@ export function StudyScreen({ uid, locale, online, initialDate, onAuthError }: P
               date={date}
               query={query}
               locale={locale}
+              includeOnline={view !== 'full'}
               onOpen={(group) => open({ kind: 'details', group })}
             />
           ) : view === 'full' ? (
