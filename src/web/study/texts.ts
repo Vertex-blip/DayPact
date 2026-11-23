@@ -1,6 +1,8 @@
 import type { Locale } from '../../shared/contracts';
 
 const kk = {
+  full: 'Толық',
+  fullSchedule: 'Толық кесте',
   weekdayReset:
     'Апта күнін өзгертсем, осы сабақтың жеке күндерге енгізілген өзгерістері жойылатынын түсінемін.',
   termBounds:
@@ -146,6 +148,8 @@ const kk = {
 };
 type Texts = { [K in keyof typeof kk]: string };
 const ru: Texts = {
+  full: 'Полностью',
+  fullSchedule: 'Всё расписание',
   weekdayReset:
     'Понимаю: при смене дня недели изменения отдельных дат этого занятия будут удалены.',
   termBounds:

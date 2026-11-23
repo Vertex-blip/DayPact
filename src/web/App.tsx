@@ -164,6 +164,7 @@ export default function App() {
     const value = new URLSearchParams(location.search).get('study');
     return value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : undefined;
   });
+  const [studyEntry, setStudyEntry] = useState(0);
   const [settings, setSettings] = useState(false);
   const [adminEligible, setAdminEligible] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
@@ -670,6 +671,7 @@ export default function App() {
         studyValidDate(event.data.studyDate)
       ) {
         setStudyDate(event.data.studyDate);
+        setStudyEntry((entry) => entry + 1);
         setTab('study');
         setSettings(false);
         setSheet(null);
@@ -1543,7 +1545,7 @@ export default function App() {
               }
             >
               <StudyScreen
-                key={user.uid}
+                key={`${user.uid}:${studyEntry}`}
                 uid={user.uid}
                 locale={locale}
                 online={online}
@@ -1782,6 +1784,10 @@ export default function App() {
               aria-current={tab === item.id ? 'page' : undefined}
               onClick={() => {
                 setTab(item.id);
+                if (item.id === 'study') {
+                  setStudyDate(undefined);
+                  setStudyEntry((entry) => entry + 1);
+                }
                 if (item.id === 'map') setMapStartTab('plans');
                 setPickerDraft(null);
                 setMeetingProposal(null);
@@ -2190,6 +2196,7 @@ export default function App() {
                         const plan = plans.find((p) => p.id === note.planId);
                         if (note.studyDate) {
                           setStudyDate(note.studyDate);
+                          setStudyEntry((entry) => entry + 1);
                           setTab('study');
                           setSettings(false);
                           setSheet(null);

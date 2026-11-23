@@ -2,6 +2,8 @@
 
 ## 23 November 2026 — private study timetable
 
+Follow-up: Study now opens a separate **full schedule** view by default. All seven days show lesson time, subject and room without expanding cards; day/week/calendar remain available. Ordinary Study navigation clears old notification dates, while notification links still open the requested day. Eleven local browser regression groups passed, including mobile layouts, full-view search, a campus-only timetable, dated overrides/holidays, offline reads and private-session locking. The owner's explicitly requested online lesson removal was applied only to their version-checked document, with associated reminder cursor recomputed and obsolete queued reminders invalidated.
+
 - Added Study navigation, week/day/calendar views, actual academic week, Midterm/Endterm/Finals, search, room copying, dated changes, weekly editing and optional reminders. Current week is independent of the browsed date. Teaching recurrence stops outside term dates; missing source lessons remain incomplete.
 - The owner's screenshot import is stored only under their UID. Private import files stay ignored; public tests use synthetic data. Study documents are part of account export and cascade deletion. Offline reads are scoped to the active account; authorization failures clear cached study data and persist a private-session lock.
 - TypeScript, production build and **255 tests across 16 files passed**. Coverage includes owner isolation, strict nested validation, concurrent edits, exact retries, moderation/deletion, real D1 reminder batches, stale notification versions, per-device permission changes, service-worker links and cache isolation. All 43 map files passed verification.

@@ -227,6 +227,104 @@ function DayNotice({ data, date, locale }: { data: StudyData; date: string; loca
   return null;
 }
 
+/** Every known lesson is visible immediately; no accordion state or extra network request. */
+export function StudyFullWeek({
+  data,
+  date,
+  now,
+  locale,
+  onOpen,
+  onIncomplete,
+  editable,
+}: {
+  data: StudyData;
+  date: string;
+  now: Date;
+  locale: Locale;
+  onOpen: (group: StudyOccurrenceGroup) => void;
+  onIncomplete: (value: StudyIncompleteDay) => void;
+  editable: boolean;
+}) {
+  const t = studyTexts(locale),
+    today = studyLocalParts(now, data.term.timeZone).date;
+  return (
+    <div className="study-full-schedule" data-testid="study-full-schedule">
+      <div className="study-section-heading">
+        <h2>{t.fullSchedule}</h2>
+      </div>
+      <div className="study-full-list">
+        {studyWeekDates(date).map((day) => {
+          const weekday = studyWeekday(day),
+            state = studyDayState(data, day),
+            items = studyOccurrences(data, day);
+          const groups = studyGroupOccurrences(items),
+            count = items.filter((item) => !item.cancelled).length;
+          const partial =
+            state.withinTerm && !state.suppressed
+              ? data.term.incompleteDays.find((item) => item.weekday === weekday)
+              : undefined;
+          return (
+            <section className={`study-full-day ${day === today ? 'is-today' : ''}`} key={day}>
+              <header>
+                <h3>
+                  {studyWeekNames(locale)[weekday - 1]}
+                  {day === today && <small>{t.today}</small>}
+                </h3>
+                <span>{studyDateLabel(day, locale)}</span>
+              </header>
+              <DayNotice data={data} date={day} locale={locale} />
+              {groups.length > 0 ? (
+                <div className="study-full-rows">
+                  {groups.map((group) => (
+                    <button
+                      className={`study-full-row ${group.cancelled ? 'is-cancelled' : ''}`}
+                      key={group.id}
+                      onClick={() => onOpen(group)}
+                    >
+                      <span className="study-full-time">
+                        <strong>{group.startTime}</strong>
+                        <span>{group.endTime}</span>
+                      </span>
+                      <span className="study-full-subject">
+                        <strong>{group.title}</strong>
+                        <span>
+                          {t[group.kind]}
+                          {group.count > 1 ? ` · ${group.count} ${t.lessons}` : ''}
+                          {group.modified ? ` · ${group.cancelled ? t.cancelled : t.changed}` : ''}
+                        </span>
+                      </span>
+                      <span
+                        className={`study-full-room ${group.format === 'online' ? 'is-online' : ''}`}
+                      >
+                        {group.format === 'online' ? t.onlineFormat : group.room || t.roomMissing}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : !partial && !state.suppressed ? (
+                <p className="study-full-empty">{t.noLessons}</p>
+              ) : null}
+              {partial && (
+                <IncompleteNotice
+                  value={partial}
+                  locale={locale}
+                  editable={editable}
+                  onEdit={() => onIncomplete(partial)}
+                />
+              )}
+              {count > 0 && !partial && (
+                <span className="study-full-count">
+                  {count} {t.lessons}
+                </span>
+              )}
+            </section>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function StudyWeek({
   data,
   date,

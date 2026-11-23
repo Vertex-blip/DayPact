@@ -58,6 +58,7 @@ import {
   ActualStudyStatus,
   StudyCalendar,
   StudyDay,
+  StudyFullWeek,
   StudyLessonDetails,
   StudySearch,
   StudyWeek,
@@ -107,7 +108,9 @@ export function StudyScreen({ uid, locale, online, initialDate, onAuthError }: P
     [notice, setNotice] = useState('');
   const [reload, setReload] = useState(0),
     [panel, setPanel] = useState<Panel | null>(null);
-  const [view, setView] = useState<'day' | 'week' | 'calendar'>(initialDate ? 'day' : 'week');
+  const [view, setView] = useState<'full' | 'day' | 'week' | 'calendar'>(
+    initialDate && studyValidDate(initialDate) ? 'day' : 'full',
+  );
   const [selectedDate, setSelectedDate] = useState(
       initialDate && studyValidDate(initialDate) ? initialDate : '',
     ),
@@ -455,7 +458,7 @@ export function StudyScreen({ uid, locale, online, initialDate, onAuthError }: P
         <>
           <ActualStudyStatus data={study} now={now} locale={locale} />
           <nav className="study-tabs" aria-label={t.title}>
-            {(['day', 'week', 'calendar'] as const).map((tab) => (
+            {(['full', 'day', 'week', 'calendar'] as const).map((tab) => (
               <button
                 key={tab}
                 className={view === tab ? 'is-active' : ''}
@@ -555,6 +558,16 @@ export function StudyScreen({ uid, locale, online, initialDate, onAuthError }: P
               query={query}
               locale={locale}
               onOpen={(group) => open({ kind: 'details', group })}
+            />
+          ) : view === 'full' ? (
+            <StudyFullWeek
+              data={study}
+              date={date}
+              now={now}
+              locale={locale}
+              onOpen={(group) => open({ kind: 'details', group })}
+              onIncomplete={(day) => open({ kind: 'incomplete', day })}
+              editable={editable}
             />
           ) : view === 'week' ? (
             <StudyWeek

@@ -99,6 +99,65 @@ const noOverflow = async () =>
 try {
   await page.clock.install({ time: new Date('2026-11-23T09:00:00Z') });
   await page.goto(base);
+  await expect(page.getByTestId('study-full-schedule')).toBeVisible();
+  await expect(page.locator('.study-full-day')).toHaveCount(7);
+  await expect(page.getByRole('button', { name: 'Толық', exact: true })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+  for (const title of new Set(doc.lessons.map((item) => item.title)))
+    await expect(page.getByTestId('study-full-schedule')).toContainText(title);
+  await expect(page.locator('.study-full-day').first()).toContainText('08:00');
+  await expect(page.locator('.study-full-day').first()).toContainText('A1.1.101');
+  await expect(page.locator('.study-full-row')).toHaveCount(14);
+  await page.getByLabel('Пән, кабинет немесе оқытушы').fill('A1.1.808');
+  await expect(page.locator('.study-lesson')).toHaveCount(2);
+  await page.getByRole('button', { name: 'Тазарту', exact: true }).click();
+  await expect(page.locator('.study-full-day')).toHaveCount(7);
+  const original = structuredClone(doc);
+  doc = {
+    ...doc,
+    lessons: doc.lessons.filter((item) => item.format !== 'online'),
+    version: doc.version + 1,
+  };
+  await page.getByRole('button', { name: 'Оқу баптаулары', exact: true }).click();
+  await dialog().getByRole('button', { name: 'Жаңарту', exact: true }).click();
+  await expect(page.locator('.study-full-row')).toHaveCount(13);
+  await expect(page.locator('.study-full-row .is-online')).toHaveCount(0);
+  await expect(
+    page.locator('.study-full-day').first().locator('.study-full-row').first(),
+  ).toContainText('13:05');
+  await expect(page.locator('.study-full-day').nth(2)).toContainText('Кесте толық емес');
+  await expect(page.locator('.study-full-day').nth(5).locator('.study-full-row')).toHaveCount(0);
+  await noOverflow();
+  await page.screenshot({ path: path.join(output, 'full-430-dark.png'), fullPage: true });
+  await page.setViewportSize({ width: 375, height: 812 });
+  await noOverflow();
+  await page.screenshot({ path: path.join(output, 'full-375-dark.png'), fullPage: true });
+  await page.setViewportSize({ width: 320, height: 700 });
+  await noOverflow();
+  await page.evaluate(() => window.studyHarness.setProps({ locale: 'ru' }));
+  await expect(page.getByRole('button', { name: 'Полностью', exact: true })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+  await noOverflow();
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.evaluate(() => (document.documentElement.dataset.theme = 'light'));
+  await page.screenshot({ path: path.join(output, 'full-375-light-ru.png'), fullPage: true });
+  await page.evaluate(() => {
+    window.studyHarness.setProps({ locale: 'kk' });
+    document.documentElement.dataset.theme = 'dark';
+  });
+  await page.setViewportSize({ width: 430, height: 932 });
+  doc = { ...original, version: doc.version + 1 };
+  await page.getByRole('button', { name: 'Оқу баптаулары', exact: true }).click();
+  await dialog().getByRole('button', { name: 'Жаңарту', exact: true }).click();
+  await expect(page.locator('.study-full-row')).toHaveCount(14);
+  passed(
+    'Full schedule defaults open: all times/subjects/rooms, search, no-online dataset, 430/375/320px and KK/RU',
+  );
+  await page.getByRole('button', { name: 'Апта', exact: true }).click();
   await expect(page.locator('.study-week-day')).toHaveCount(7);
   await expect(page.getByTestId('study-actual-status')).toContainText('7 желтоқсан');
   await expect(page.locator('.study-date-picker')).toContainText('Көрсетілген: 1-апта');
@@ -107,7 +166,7 @@ try {
   await expect(page.locator('.study-week-day').nth(5)).toContainText('11:00');
   await noOverflow();
   await page.screenshot({ path: path.join(output, 'week-430-dark.png'), fullPage: true });
-  passed('Week default, 7 days, pre-term status and incomplete days');
+  passed('Week overview, 7 days, pre-term status and incomplete days');
 
   await page.getByRole('button', { name: 'Аптаны толық ашу', exact: true }).click();
   await expect(page.locator('.study-week-day').nth(2).locator('.study-lesson')).toHaveCount(2);
@@ -132,6 +191,14 @@ try {
   await expect(page.locator('.study-lesson').filter({ hasText: 'A1.TEST' })).toContainText(
     'Өзгертілген',
   );
+  await page.getByRole('button', { name: 'Толық', exact: true }).click();
+  await expect(page.locator('.study-full-row').filter({ hasText: 'A1.TEST' })).toContainText(
+    '12:00',
+  );
+  await page.locator('.study-full-row').filter({ hasText: 'A1.TEST' }).click();
+  await expect(dialog()).toContainText('A1.TEST');
+  await close();
+  await page.getByRole('button', { name: 'Күн', exact: true }).click();
   await chooseDate('2026-12-14');
   await expect(page.locator('.study-lesson').filter({ hasText: 'A1.TEST' })).toHaveCount(0);
   await expect(page.locator('.study-lesson').filter({ hasText: '13:05' })).toContainText(
@@ -143,6 +210,9 @@ try {
   await dialog().getByLabel('Бұл күні сабақ болмайды').check();
   await save();
   await expect(page.locator('.study-lesson.is-cancelled')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Толық', exact: true }).click();
+  await expect(page.locator('.study-full-row.is-cancelled')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Күн', exact: true }).click();
   await page.locator('.study-lesson.is-cancelled').click();
   await dialog().getByRole('button', { name: 'Тек осы күнді өзгерту', exact: true }).click();
   await dialog().getByRole('button', { name: 'Осы күнгі өзгерісті алып тастау' }).click();
@@ -212,6 +282,9 @@ try {
   await chooseDate('2026-12-08');
   await expect(page.locator('.study-lesson')).toHaveCount(0);
   await expect(page.locator('.study-day-note')).toContainText('Оқу демалысы');
+  await page.getByRole('button', { name: 'Толық', exact: true }).click();
+  await expect(page.locator('.study-full-day').nth(1).locator('.study-full-row')).toHaveCount(0);
+  await expect(page.locator('.study-full-day').nth(1)).toContainText('Оқу демалысы');
   await page.getByRole('button', { name: 'Оқу баптаулары', exact: true }).click();
   await dialog()
     .getByRole('button', { name: /Сабақ еске салулары/ })
