@@ -1,5 +1,14 @@
 # DayPact release verification
 
+## 23 November 2026 — private study timetable
+
+- Added Study navigation, week/day/calendar views, actual academic week, Midterm/Endterm/Finals, search, room copying, dated changes, weekly editing and optional reminders. Current week is independent of the browsed date. Teaching recurrence stops outside term dates; missing source lessons remain incomplete.
+- The owner's screenshot import is stored only under their UID. Private import files stay ignored; public tests use synthetic data. Study documents are part of account export and cascade deletion. Offline reads are scoped to the active account; authorization failures clear cached study data and persist a private-session lock.
+- TypeScript, production build and **255 tests across 16 files passed**. Coverage includes owner isolation, strict nested validation, concurrent edits, exact retries, moderation/deletion, real D1 reminder batches, stale notification versions, per-device permission changes, service-worker links and cache isolation. All 43 map files passed verification.
+- Local browser checks passed week/day/calendar, KK/RU and dark/light at 430/375/320 px, weekly CRUD, dated changes and restoration, holiday suppression, calendar/reminder settings, actual-week/phase labels, CAS conflict handling, offline reads and persistent cache locking after suspension. Screenshots were visually reviewed. The browser harness uses synthetic accounts and timetable data.
+- Migration `0005_study.sql` was applied remotely. The private import was validated and inserted without overwriting existing data; metadata verified 23 full lesson slots and the 7 December teaching start. No fixture push was sent to a real user. A new physical-device lesson reminder has not yet been observed; the delivery path reuses the previously confirmed iPhone push setup.
+- Deployed Cloudflare version `ad07de0a-f59e-4ece-abb7-dd234579fed5` passed **18 live API/browser checks** using two disposable Firebase identities. Verified actual sign-in, Study navigation, seven-day view, room display, own/other-user isolation, query rejection, exact retries, stale writes and dated cancellation. Both fixture accounts and their application data were removed. Production health returned 200, anonymous Study returned 401, API responses were private/no-store, and the deployed service worker included Study routing.
+
 ## 20 November 2026 — owner administration
 
 - Added a localized owner panel in Profile and Settings, using DayPact's existing light/dark appearance. Sections cover registered Firebase accounts (including unverified registrations), support requests/replies, push failure metadata, application/D1 counts and administrative actions.

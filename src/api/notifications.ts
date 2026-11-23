@@ -1,6 +1,8 @@
 import { importPKCS8, SignJWT } from 'jose';
 import { DEFAULT_SETTINGS, type Locale, type Settings } from '../shared/contracts';
 import { HttpError, type Env } from './types';
+import type { StudyData } from '../shared/study';
+import { studyOccurrences, studyWallInstant } from '../shared/studyTime';
 
 let access: { project: string; email: string; token: string; expires: number } | undefined;
 async function accessToken(env: Env): Promise<string> {
@@ -147,6 +149,9 @@ interface Pending {
   next_attempt_at: string;
   created_at: string;
   settings_json: string;
+  study_lesson_id: string | null;
+  study_date: string | null;
+  study_version: number | null;
 }
 /** Bounded work on the Free plan. A lease prevents overlapping cron deliveries.
  * Delivery is at-least-once; browser notification tags deduplicate retries. */
@@ -158,7 +163,7 @@ export async function deliverNotifications(
     return { delivered: 0, configured: false };
   const nowIso = now.toISOString();
   const rows = await env.DB.prepare(
-    `SELECT n.id,n.user_id,n.plan_id,n.kind,n.attempts,n.next_attempt_at,n.created_at,u.settings_json
+    `SELECT n.id,n.user_id,n.plan_id,n.kind,n.attempts,n.next_attempt_at,n.created_at,u.settings_json,n.study_lesson_id,n.study_date,n.study_version
     FROM notifications n JOIN users u ON u.uid=n.user_id
     WHERE n.state='pending' AND n.next_attempt_at<=?
     AND NOT EXISTS(SELECT 1 FROM user_moderation m WHERE m.user_id=u.uid AND m.state<>'active')
@@ -174,15 +179,41 @@ export async function deliverNotifications(
     const claim = await env.DB.prepare(
       `UPDATE notifications SET attempts=attempts+1,next_attempt_at=? WHERE id=? AND state='pending' AND attempts=? AND next_attempt_at<=?
       AND NOT EXISTS(SELECT 1 FROM user_moderation m WHERE m.user_id=notifications.user_id AND m.state<>'active')
-      RETURNING (SELECT settings_json FROM users WHERE uid=notifications.user_id) AS settings_json`,
+      RETURNING (SELECT settings_json FROM users WHERE uid=notifications.user_id) AS settings_json,
+      (SELECT data_json FROM study_documents WHERE user_id=notifications.user_id AND version=notifications.study_version) AS study_json`,
     )
       .bind(leaseUntil, item.id, item.attempts, nowIso)
-      .first<{ settings_json: string }>();
+      .first<{ settings_json: string; study_json: string | null }>();
     if (!claim) continue;
     const settings: Settings = { ...DEFAULT_SETTINGS, ...JSON.parse(claim.settings_json) };
     const stale = now.getTime() - Date.parse(item.created_at) > 24 * 3600000;
+    let studyBody: string | null = null;
+    let studyTtl = 0;
+    if (item.study_version !== null && item.study_date && claim.study_json) {
+      const data = JSON.parse(claim.study_json) as StudyData;
+      const lesson = studyOccurrences(data, item.study_date).find(
+        (entry) => entry.id === item.study_lesson_id && !entry.cancelled,
+      );
+      if (lesson && data.term.remindMinutes >= 0) {
+        studyTtl = Math.min(
+          3600,
+          Math.floor(
+            (studyWallInstant(item.study_date, lesson.startTime, data.term.timeZone).getTime() -
+              now.getTime()) /
+              1000,
+          ),
+        );
+        studyBody =
+          settings.locale === 'ru'
+            ? 'Скоро занятие. Открой расписание.'
+            : 'Сабақ жақында басталады. Кестеңді аш.';
+        if (data.term.roomInPush)
+          studyBody = `${lesson.startTime} · ${lesson.format === 'online' ? (settings.locale === 'ru' ? 'Онлайн' : 'Онлайн') : lesson.room || (settings.locale === 'ru' ? 'Аудитория не указана' : 'Кабинет көрсетілмеген')}`;
+      }
+    }
     if (
       stale ||
+      (item.study_version !== null && (!studyBody || studyTtl <= 0)) ||
       !settings.notificationsEnabled ||
       (item.kind === 'nudge' && !settings.friendNudges) ||
       isQuiet(settings, now)
@@ -195,9 +226,10 @@ export async function deliverNotifications(
     const devices = await env.DB.prepare(
       `SELECT token FROM push_tokens WHERE user_id=?
       AND NOT EXISTS(SELECT 1 FROM user_moderation m WHERE m.user_id=push_tokens.user_id AND m.state<>'active')
+      AND (? IS NULL OR EXISTS(SELECT 1 FROM study_documents s WHERE s.user_id=push_tokens.user_id AND s.version=?))
       ORDER BY updated_at DESC LIMIT 3`,
     )
-      .bind(item.user_id)
+      .bind(item.user_id, item.study_version, item.study_version)
       .all<{ token: string }>();
     if (!devices.results.length) {
       await env.DB.prepare(`UPDATE notifications SET state='skipped' WHERE id=?`)
@@ -207,7 +239,20 @@ export async function deliverNotifications(
     }
     let retry = false,
       successful = 0;
+    const link = item.study_date
+      ? `${env.APP_ORIGIN}/?study=${encodeURIComponent(item.study_date)}`
+      : `${env.APP_ORIGIN}/?plan=${encodeURIComponent(item.plan_id ?? '')}`;
     for (const device of devices.results) {
+      if (item.study_version !== null) {
+        const current = await env.DB.prepare(
+          `SELECT s.version FROM study_documents s JOIN users u ON u.uid=s.user_id
+          WHERE s.user_id=? AND s.version=? AND json_extract(u.settings_json,'$.notificationsEnabled')=1
+          AND NOT EXISTS(SELECT 1 FROM user_moderation m WHERE m.user_id=s.user_id AND m.state<>'active')`,
+        )
+          .bind(item.user_id, item.study_version)
+          .first();
+        if (!current) break;
+      }
       let response: Response;
       try {
         response = await fetch(
@@ -223,24 +268,26 @@ export async function deliverNotifications(
                   notificationId: item.id,
                   planId: item.plan_id ?? '',
                   recipientUid: item.user_id,
+                  ...(item.study_date ? { studyDate: item.study_date } : {}),
                 },
                 webpush: {
-                  headers: { TTL: '3600', Urgency: 'normal' },
+                  headers: { TTL: String(studyBody ? studyTtl : 3600), Urgency: 'normal' },
                   notification: {
                     title: 'DayPact',
                     body:
-                      settings.locale === 'ru'
+                      studyBody ??
+                      (settings.locale === 'ru'
                         ? 'У тебя новое напоминание. Открой свои планы.'
-                        : 'Жаңа еске салу бар. Жоспарларыңды аш.',
+                        : 'Жаңа еске салу бар. Жоспарларыңды аш.'),
                     icon: '/icons/icon-192.png',
                     tag: `daypact-${item.id}`,
                     renotify: false,
                     data: {
-                      url: `${env.APP_ORIGIN}/?plan=${encodeURIComponent(item.plan_id ?? '')}`,
+                      url: link,
                     },
                   },
                   fcm_options: {
-                    link: `${env.APP_ORIGIN}/?plan=${encodeURIComponent(item.plan_id ?? '')}`,
+                    link,
                   },
                 },
               },

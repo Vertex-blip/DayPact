@@ -19,6 +19,7 @@ import {
   Copy,
   Download,
   Home,
+  GraduationCap,
   Info,
   LoaderCircle,
   Map as MapIcon,
@@ -46,6 +47,8 @@ import type {
   Settings as SettingsData,
 } from '../shared/contracts';
 import type { AdminAccess } from '../shared/admin';
+import type { StudyResponse } from '../shared/study';
+import { studyValidDate } from '../shared/studyTime';
 import { AuthScreen } from './AuthScreen';
 import { PasswordInput } from './PasswordInput';
 import {
@@ -102,10 +105,13 @@ const AdminScreen = lazy(() =>
 const SupportScreen = lazy(() =>
   import('./SupportScreen').then((m) => ({ default: m.SupportScreen })),
 );
+const StudyScreen = lazy(() =>
+  import('./study/StudyScreen').then((m) => ({ default: m.StudyScreen })),
+);
 const OfflineMapsSettings = lazy(() =>
   import('./map/OfflineMapsSettings').then((m) => ({ default: m.OfflineMapsSettings })),
 );
-type Tab = 'home' | 'map' | 'friends' | 'profile';
+type Tab = 'home' | 'study' | 'map' | 'friends' | 'profile';
 type Sheet =
   | 'invite'
   | 'notifications'
@@ -154,6 +160,10 @@ export default function App() {
   } | null>(null);
   const [date, setDate] = useState(() => localDate());
   const [tab, setTab] = useState<Tab>('home');
+  const [studyDate, setStudyDate] = useState<string | undefined>(() => {
+    const value = new URLSearchParams(location.search).get('study');
+    return value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : undefined;
+  });
   const [settings, setSettings] = useState(false);
   const [adminEligible, setAdminEligible] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
@@ -363,6 +373,7 @@ export default function App() {
           if (next && old !== next.uid) activatePrivateSession(next.uid);
           void setActivePushUser(next?.emailVerified ? next.uid : null);
           if (old && old !== next?.uid) {
+            setStudyDate(undefined);
             setAdminEligible(false);
             setAdminOpen(false);
             void clearPrivateData(old).catch(() => {});
@@ -645,17 +656,39 @@ export default function App() {
         if (event.data.recipientUid === user?.uid) void refresh();
       } else if (
         event.data?.type === 'DAYPACT_OPEN_PLAN' &&
+        event.data.recipientUid === user?.uid &&
         typeof event.data.planId === 'string'
       ) {
         setDeepLinkPlan(event.data.planId);
         setDate(localDate(profile?.settings.timeZone));
         setTab('home');
         void refresh();
+      } else if (
+        event.data?.type === 'DAYPACT_OPEN_STUDY' &&
+        event.data.recipientUid === user?.uid &&
+        typeof event.data.studyDate === 'string' &&
+        studyValidDate(event.data.studyDate)
+      ) {
+        setStudyDate(event.data.studyDate);
+        setTab('study');
+        setSettings(false);
+        setSheet(null);
       }
     };
     navigator.serviceWorker.addEventListener('message', listener);
     return () => navigator.serviceWorker.removeEventListener('message', listener);
   }, [user, profile?.settings.timeZone, refresh]);
+  useEffect(() => {
+    if (!profile || !user?.emailVerified) return;
+    const url = new URL(location.href);
+    const wanted = url.searchParams.get('study');
+    if (!wanted || !studyValidDate(wanted)) return;
+    setStudyDate(wanted);
+    setTab('study');
+    setSettings(false);
+    url.searchParams.delete('study');
+    history.replaceState(null, '', url);
+  }, [profile, user?.emailVerified]);
   useEffect(() => {
     if (!deepLinkPlan || !profile || loading) return;
     const plan = plans.find((p) => p.id === deepLinkPlan);
@@ -990,6 +1023,7 @@ export default function App() {
       }
       if (!complete) throw new ApiError('EXPORT_TOO_LARGE');
       combined.meetingCoordinationRecords = meetingCoordinationRecords;
+      combined.study = (await api<StudyResponse>('/study', { expectedUid: uid })).study;
       if (currentAuth()?.currentUser?.uid !== uid) throw new ApiError('UNAUTHENTICATED', 401);
       delete combined.nextCursor;
       const url = URL.createObjectURL(
@@ -1500,6 +1534,24 @@ export default function App() {
               )}
             </main>
           )}
+          {tab === 'study' && (
+            <Suspense
+              fallback={
+                <div className="inline-loading">
+                  <LoaderCircle className="spin" />
+                </div>
+              }
+            >
+              <StudyScreen
+                key={user.uid}
+                uid={user.uid}
+                locale={locale}
+                online={online}
+                initialDate={studyDate}
+                onAuthError={() => hidePrivateView()}
+              />
+            </Suspense>
+          )}
           {tab === 'map' && (
             <main className="map-page">
               <Suspense
@@ -1718,6 +1770,7 @@ export default function App() {
           {(
             [
               { id: 'home', icon: Home, label: t.today },
+              { id: 'study', icon: GraduationCap, label: locale === 'kk' ? 'Оқу' : 'Учёба' },
               { id: 'map', icon: MapIcon, label: t.map },
               { id: 'friends', icon: Users, label: t.friends },
               { id: 'profile', icon: UserRound, label: t.profile },
@@ -1743,6 +1796,7 @@ export default function App() {
 
       {editor && (
         <PlanEditor
+          onAuthError={hidePrivateView}
           value={editor}
           date={date}
           timeZone={profile.settings.timeZone}
@@ -2134,6 +2188,12 @@ export default function App() {
                           prev.map((n) => (n.id === note.id ? { ...n, read: true } : n)),
                         );
                         const plan = plans.find((p) => p.id === note.planId);
+                        if (note.studyDate) {
+                          setStudyDate(note.studyDate);
+                          setTab('study');
+                          setSettings(false);
+                          setSheet(null);
+                        }
                         if (plan) {
                           setSheet(null);
                           setSelected(plan);

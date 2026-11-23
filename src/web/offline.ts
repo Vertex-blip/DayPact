@@ -1,6 +1,7 @@
 import type { CheckinInput, Plan, PlanInput, Profile, Friend } from '../shared/contracts';
 import { api, ApiError, writeApi } from './api';
 import { currentAuth } from './firebase';
+import type { StudyDocument } from '../shared/study';
 
 const DB_NAME = 'daypact-private-v1';
 const epochs = new Map<string, number>();
@@ -111,6 +112,30 @@ export async function loadSnapshot(uid: string, date?: string): Promise<Snapshot
     s.get(`${uid}:${date ? `day:${date}` : 'last'}`),
   );
   return row?.value as Snapshot | undefined;
+}
+export async function saveStudyCache(uid: string, study: StudyDocument | null): Promise<void> {
+  const guard = writeGuard(uid);
+  await clearing.get(uid);
+  if (currentAuth()?.currentUser?.uid !== uid) throw new ApiError('UNAUTHENTICATED', 401);
+  await operation(
+    'cache',
+    'readwrite',
+    (s) => s.put({ key: `${uid}:study`, uid, value: study } satisfies RecordValue),
+    () => guard() && currentAuth()?.currentUser?.uid === uid,
+  );
+}
+export async function loadStudyCache(uid: string): Promise<StudyDocument | null | undefined> {
+  const guard = writeGuard(uid);
+  if (currentAuth()?.currentUser?.uid !== uid) throw new ApiError('UNAUTHENTICATED', 401);
+  const row = await operation<RecordValue | undefined>(
+    'cache',
+    'readonly',
+    (s) => s.get(`${uid}:study`),
+    guard,
+  );
+  if (!guard() || currentAuth()?.currentUser?.uid !== uid)
+    throw new ApiError('UNAUTHENTICATED', 401);
+  return row?.value as StudyDocument | null | undefined;
 }
 export async function enqueueCheckin(
   uid: string,

@@ -79,6 +79,7 @@ export interface MeetingPlaces {
 export interface AppNotification {
   id: string;
   planId: string | null;
+  studyDate?: string | null;
   kind: 'reminder' | 'nudge';
   title: string;
   body: string;

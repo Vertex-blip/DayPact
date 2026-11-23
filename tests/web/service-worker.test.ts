@@ -37,6 +37,7 @@ function worker() {
   return {
     showNotification,
     openWindow,
+    clients: context.self.clients,
     dispatch,
     setUser: (uid: string | null) =>
       dispatch('message', {
@@ -46,6 +47,41 @@ function worker() {
   };
 }
 describe('notification privacy on a shared device', () => {
+  it('opens the study date in an existing app with a bound recipient', async () => {
+    const w = worker();
+    await w.setUser('alice');
+    await w.dispatch('push', {
+      data: {
+        json: () => ({
+          data: { recipientUid: 'alice', studyDate: '2026-12-07', notificationId: 'study-1' },
+        }),
+      },
+    });
+    const data = w.showNotification.mock.calls[0][1].data;
+    const client = { url: 'https://daypact.test/', focus: vi.fn(), postMessage: vi.fn() };
+    w.clients.matchAll.mockResolvedValue([client]);
+    await w.dispatch('notificationclick', { notification: { close: vi.fn(), data } });
+    expect(client.postMessage).toHaveBeenCalledWith({
+      type: 'DAYPACT_OPEN_STUDY',
+      studyDate: '2026-12-07',
+      recipientUid: 'alice',
+    });
+    await w.setUser('bob');
+    client.postMessage.mockClear();
+    await w.dispatch('notificationclick', { notification: { close: vi.fn(), data } });
+    expect(client.postMessage).not.toHaveBeenCalled();
+  });
+  it('opens a same-origin study date when the app is closed', async () => {
+    const w = worker();
+    await w.setUser('alice');
+    await w.dispatch('notificationclick', {
+      notification: {
+        close: vi.fn(),
+        data: { recipientUid: 'alice', studyDate: '2026-12-07', url: 'https://evil.test' },
+      },
+    });
+    expect(w.openWindow).toHaveBeenCalledWith('/?study=2026-12-07');
+  });
   it('fails closed without an active account and for another recipient', async () => {
     const w = worker();
     const payload = {

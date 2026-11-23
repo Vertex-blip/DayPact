@@ -12,6 +12,7 @@ import type {
 import { texts } from './i18n';
 import { Modal } from './components';
 import { meetingTexts } from './meetingTexts';
+import { StudyConflict } from './StudyConflict';
 
 export type EditorValue = { plan?: Plan; draft?: PlanInput; place?: Place; mode?: 'meeting' };
 interface Props {
@@ -24,6 +25,7 @@ interface Props {
   onClose: () => void;
   onSave: (input: PlanInput, plan?: Plan) => Promise<void>;
   onPickPlace: (draft: PlanInput, plan?: Plan) => void;
+  onAuthError?: () => void;
 }
 export function PlanEditor({
   value,
@@ -35,6 +37,7 @@ export function PlanEditor({
   onClose,
   onSave,
   onPickPlace,
+  onAuthError,
 }: Props) {
   const t = texts(locale);
   const initial = value.draft ?? value.plan;
@@ -47,6 +50,8 @@ export function PlanEditor({
   );
   const [place, setPlace] = useState<Place | null>(value.place ?? initial?.place ?? null);
   const [error, setError] = useState('');
+  const [selectedDate, setSelectedDate] = useState(initial?.startDate ?? date);
+  const [selectedTime, setSelectedTime] = useState(initial?.time ?? '09:00');
   function read(form: HTMLFormElement): PlanInput {
     const d = new FormData(form);
     return {
@@ -188,14 +193,30 @@ export function PlanEditor({
               required
               min="2020-01-01"
               max="2100-12-31"
-              defaultValue={initial?.startDate ?? date}
+              value={selectedDate}
+              onChange={(event) => setSelectedDate(event.target.value)}
             />
           </label>
           <label>
             {t.time}
-            <input name="time" type="time" required defaultValue={initial?.time ?? '09:00'} />
+            <input
+              name="time"
+              type="time"
+              required
+              value={selectedTime}
+              onChange={(event) => setSelectedTime(event.target.value)}
+            />
           </label>
         </div>
+        {kind === 'event' && (
+          <StudyConflict
+            date={selectedDate}
+            time={selectedTime}
+            zone={initial?.timeZone ?? timeZone}
+            locale={locale}
+            onAuthError={onAuthError}
+          />
+        )}
         <label>
           {t.remindBefore}
           <select name="reminder" defaultValue={initial?.remindMinutes ?? 15}>

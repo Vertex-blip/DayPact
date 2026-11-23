@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { createAdminApi } from './admin';
+import { createStudyApi } from './study';
 import { isAdminOwner } from './admin/guards';
 import { supportTicket, type SupportRow } from './domain/support';
 import { bodyLimit } from 'hono/body-limit';
@@ -98,13 +99,12 @@ function errorResponse(status: number, code: string, message: string, requestId:
 /** Dependencies can be injected by unit tests, never by an HTTP parameter or environment bypass. */
 export function createApi(verify: Authenticator = defaultAuthenticate) {
   const app = new Hono<Bindings>().basePath('/api');
-  app.use(
-    '*',
+  app.use('*', (c, next) =>
     bodyLimit({
-      maxSize: 16 * 1024,
+      maxSize: c.req.path === '/api/study' && c.req.method === 'PUT' ? 64 * 1024 : 16 * 1024,
       onError: () =>
         errorResponse(413, 'BODY_TOO_LARGE', 'Request is too large', crypto.randomUUID()),
-    }),
+    })(c, next),
   );
   app.use('*', async (c, next) => {
     c.header('Cache-Control', 'no-store');
@@ -155,6 +155,7 @@ export function createApi(verify: Authenticator = defaultAuthenticate) {
   app.notFound(() => errorResponse(404, 'NOT_FOUND', 'Not found', crypto.randomUUID()));
   app.get('/health', (c) => c.json({ ok: true, service: 'daypact' }));
   app.route('/', createAdminApi());
+  app.route('/', createStudyApi());
   app.get('/support', async (c) => {
     const result = await c.env.DB.prepare(
       'SELECT * FROM support_tickets WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT 50',
@@ -784,12 +785,13 @@ export function createApi(verify: Authenticator = defaultAuthenticate) {
   });
   app.get('/notifications', async (c) => {
     const rows = await c.env.DB.prepare(
-      'SELECT id,plan_id,kind,title,body,read_at,created_at FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 100',
+      'SELECT id,plan_id,study_date,kind,title,body,read_at,created_at FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 100',
     )
       .bind(ownsIdentity(c))
       .all<{
         id: string;
         plan_id: string | null;
+        study_date: string | null;
         kind: 'reminder' | 'nudge';
         title: string;
         body: string;
@@ -800,6 +802,7 @@ export function createApi(verify: Authenticator = defaultAuthenticate) {
       notifications: rows.results.map((n) => ({
         id: n.id,
         planId: n.plan_id,
+        studyDate: n.study_date,
         kind: n.kind,
         title: n.title,
         body: n.body,

@@ -69,7 +69,9 @@ Browser storage is **not end-to-end encrypted**. An unlocked browser profile, de
 
 FCM credentials are worker-only secrets. Use a dedicated service account with minimum messaging permissions and store its key through Cloudflare secrets. Rotate exposed credentials.
 
-Push text is generic and excludes plan content, locations, religion, amounts and profile information. Routing metadata includes recipient UID, notification ID and plan ID. The service worker checks the active account before showing/opening notifications; these identifiers do not authorize plan access.
+Plan push text is generic and excludes plan content, locations, religion, amounts and profile information. Study push text is generic by default; its owner may explicitly include lesson time and room. Routing metadata includes recipient UID, notification ID and plan ID or study date. The service worker checks the active account before showing/opening notifications; these identifiers do not authorize data access.
+
+Study data is selected exclusively by the verified caller UID. Strict schemas reject extra fields and arbitrary ownership parameters; document versions prevent lost updates. Term ranges, nested collection sizes and serialized bytes are bounded. IndexedDB study reads/writes guard account identity and session epochs, and reuse private-cache deletion. Study notification claims re-resolve matching document versions and recheck version/active status before each device send. Any already accepted provider message cannot be recalled; delivery is best effort. Private source timetable screenshots and import data remain outside the public repository and client bundle.
 
 A two-minute delivery lease prevents overlapping workers from normally sending the same row. Claims read current preferences; disabled notifications/nudges, quiet hours, missing devices and records older than 24 hours are skipped. Transient failures retry with bounded backoff; unregistered tokens are removed. All-invalid tokens do not count as successful delivery. D1 atomically limits each user to three devices.
 

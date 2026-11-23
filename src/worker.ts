@@ -2,6 +2,7 @@ import { createApi } from './api/app';
 import { authenticate } from './api/auth';
 import { deliverNotifications } from './api/notifications';
 import { enqueueDueReminders } from './api/domain/reminders';
+import { enqueueDueStudyReminders } from './api/study-reminders';
 import { applySecurity, digest, enforceOrigin, limitedBody, rateLimit } from './api/security';
 import { HttpError, type Env } from './api/types';
 
@@ -25,7 +26,10 @@ export default {
       }
       if (request.method === 'OPTIONS')
         return applySecurity(new Response(null, { status: 204 }), true);
-      const limited = await limitedBody(request);
+      const limited = await limitedBody(
+        request,
+        url.pathname === '/api/study' && request.method === 'PUT' ? 64 * 1024 : 16384,
+      );
       const result = await api.fetch(limited, env, ctx);
       const response = applySecurity(result, true);
       response.headers.set('X-Request-ID', requestId);
@@ -60,7 +64,8 @@ export default {
       (async () => {
         try {
           const now = new Date();
-          await enqueueDueReminders(env, now);
+          await enqueueDueReminders(env, now, 2);
+          await enqueueDueStudyReminders(env, now, 1);
           const result = await deliverNotifications(env, now);
           if (now.getUTCMinutes() === 0)
             await env.DB.prepare(

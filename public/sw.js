@@ -137,6 +137,10 @@ self.addEventListener('push', (event) => {
             : 'DayPact-та жаңа еске салу бар.';
       const planId =
         typeof data.planId === 'string' && data.planId.length <= 100 ? data.planId : null;
+      const studyDate =
+        typeof data.studyDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(data.studyDate)
+          ? data.studyDate
+          : null;
       const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       for (const client of windows)
         client.postMessage({ type: 'DAYPACT_PUSH', recipientUid: activeUid, planId });
@@ -145,7 +149,7 @@ self.addEventListener('push', (event) => {
         icon: '/icons/icon-192.png',
         badge: '/icons/icon-192.png',
         tag: typeof data.notificationId === 'string' ? data.notificationId : undefined,
-        data: { planId, recipientUid: activeUid },
+        data: { planId, studyDate, recipientUid: activeUid },
       });
     })(),
   );
@@ -157,16 +161,25 @@ self.addEventListener('notificationclick', (event) => {
       const activeUid = await pushContext();
       if (!activeUid || event.notification.data?.recipientUid !== activeUid) return;
       const planId = event.notification.data?.planId;
+      const studyDate = event.notification.data?.studyDate;
+      const study = typeof studyDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(studyDate);
       const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       for (const client of clients) {
         if (new URL(client.url).origin === self.location.origin) {
           await client.focus();
-          if (typeof planId === 'string') client.postMessage({ type: 'DAYPACT_OPEN_PLAN', planId });
+          if (study)
+            client.postMessage({ type: 'DAYPACT_OPEN_STUDY', studyDate, recipientUid: activeUid });
+          else if (typeof planId === 'string')
+            client.postMessage({ type: 'DAYPACT_OPEN_PLAN', planId, recipientUid: activeUid });
           return;
         }
       }
       await self.clients.openWindow(
-        typeof planId === 'string' ? `/?plan=${encodeURIComponent(planId)}` : '/',
+        study
+          ? `/?study=${encodeURIComponent(studyDate)}`
+          : typeof planId === 'string'
+            ? `/?plan=${encodeURIComponent(planId)}`
+            : '/',
       );
     })(),
   );

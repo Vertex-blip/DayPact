@@ -19,6 +19,8 @@ import {
   enqueuePlan,
   isPrivateSessionPaused,
   loadSnapshot,
+  loadStudyCache,
+  saveStudyCache,
   pendingCheckins,
   pendingPlans,
   resumePrivateSession,
@@ -27,6 +29,7 @@ import {
   type PendingCheckin,
 } from '../../src/web/offline';
 import { DEFAULT_SETTINGS } from '../../src/shared/contracts';
+import { createStudySeed } from '../fixtures/study';
 
 const plan: Plan = {
   id: 'plan',
@@ -83,6 +86,21 @@ beforeEach(() => {
   mocked.write.mockResolvedValue({ ok: true });
 });
 describe('private offline state', () => {
+  it('keeps study cache private and removes it on logout without late writes', async () => {
+    const study = { ...createStudySeed(), version: 1, updatedAt: '2026-11-23T00:00:00Z' };
+    await saveStudyCache('alice', study);
+    expect((await loadStudyCache('alice'))?.lessons).toHaveLength(23);
+    mocked.uid = 'bob';
+    await expect(loadStudyCache('alice')).rejects.toMatchObject({ status: 401 });
+    expect(await loadStudyCache('bob')).toBeUndefined();
+    mocked.uid = 'alice';
+    const late = saveStudyCache('alice', study);
+    const assertion = expect(late).rejects.toMatchObject({ status: 401 });
+    await clearPrivateData('alice');
+    await assertion;
+    activatePrivateSession('alice');
+    expect(await loadStudyCache('alice')).toBeUndefined();
+  });
   it('isolates snapshots and queue by account; deleting Alice leaves Bob untouched', async () => {
     for (const uid of ['alice', 'bob']) {
       await saveSnapshot(uid, {

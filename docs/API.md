@@ -174,9 +174,19 @@ The test-push endpoint sends only to the authenticated user's matching registere
 
 Device IDs are UUIDs. At most three devices can register per account; an existing device can update its token. The same token cannot be silently transferred between accounts. Registration/deletion are scoped to the caller.
 
-Push text is generic and excludes plan titles, locations, savings amounts, biographies and religious activities. Routing data includes recipient UID, notification ID and plan ID. The service worker checks the active account before displaying/opening a notification. Platform support, permission, connectivity and provider availability determine delivery.
+Plan push text is generic and excludes plan titles, locations, savings amounts, biographies and religious activities. Study push has a separate explicit time/room preference described below. Routing data includes recipient UID, notification ID and plan ID or study date. The service worker checks the active account before displaying/opening a notification. Platform support, permission, connectivity and provider availability determine delivery.
 
-Each scheduler invocation queues at most five due plans and processes at most three notifications, with at most three devices each. Delivery claims check current preferences, use a two-minute lease, retry transient failures with bounded backoff, delete unregistered tokens and skip reminders older than 24 hours. Delivery is at least once; stable browser tags reduce duplicates. Partial success can cause a previously successful device to receive a retry. Quiet-hour reminders are skipped, not postponed.
+Each scheduler invocation queues at most two due plans and one study document, then processes at most three notifications, with at most three devices each. Delivery claims check current preferences, use a two-minute lease, retry transient failures with bounded backoff, delete unregistered tokens and skip reminders older than 24 hours. Study messages expire by class start and also recheck document version. Delivery is at least once; stable browser tags reduce duplicates. Partial success can cause a previously successful device to receive a retry. Quiet-hour reminders are skipped, not postponed.
+
+## Private study timetable
+
+`GET /api/study` returns `{study: StudyDocument | null}` for the authenticated user. `PUT /api/study` accepts `{version, data: StudyData}`; version zero creates a new document. Updates require the last read version; stale edits return `409 VERSION_CONFLICT`. An exact retry of the winning write is idempotent. The endpoint accepts no user ID or query parameters. It uses a 64 KiB request ceiling and a 48 KiB persisted-document ceiling; writes are limited to 30/hour/user.
+
+Data includes one term, up to 50 weekly lessons, 120 dated overrides, 12 academic periods, 30 holidays and seven incomplete-day notes. Dates, time zones, IDs, references, durations and HTTPS lesson links are validated. Dated overrides affect only one lesson occurrence. Teaching dates bound recurrence; holidays, exams and vacations suppress normal classes. An explicit dated override can confirm a class on a holiday within the term. Teaching week numbering continues across holidays. Academic assessment titles may be Midterm and Endterm; Finals uses the exams period type.
+
+The Study page offers week/day/calendar, subject/teacher/room search, room copying, upcoming-room display and offline reads. Edits require a connection. The authenticated UID owns the IndexedDB cache, and logout/account locking clears it. Study data is included in the user's export. Meeting creation warns when its start falls within the user's own class; it never accesses friends' schedules.
+
+Study reminders support off/5/10/15/30 minutes. They use the existing minute scheduler and notification preferences. Default lock-screen text is generic; the user can opt in to time and room. Study routing adds `studyDate` to notification metadata and opens that date in Study. A version-bound queue and per-lesson/day receipts suppress stale edits and repeat reminders. Private timetable imports are operational inputs, never public application assets or repository fixtures.
 
 ## Paginated export
 

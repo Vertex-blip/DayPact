@@ -5,6 +5,8 @@ import { createLocalJWKSet, exportJWK, exportPKCS8, generateKeyPair, SignJWT } f
 import { deliverNotifications, sendTestPush } from '../../src/api/notifications';
 import { createAuthenticator } from '../../src/api/auth';
 import { DEFAULT_SETTINGS } from '../../src/shared/contracts';
+import { createStudySeed } from '../fixtures/study';
+import type { StudyData } from '../../src/shared/study';
 import type { Env } from '../../src/api/types';
 
 let mf: Miniflare, env: Env, privateKey: CryptoKey, keys: ReturnType<typeof createLocalJWKSet>;
@@ -31,7 +33,7 @@ beforeAll(async () => {
   const db = (await mf.getD1Database('DB')) as unknown as D1Database;
   let statement = '',
     trigger = false;
-  for (const line of ['0001_initial.sql', '0004_admin.sql']
+  for (const line of ['0001_initial.sql', '0004_admin.sql', '0005_study.sql']
     .map((name) => readFileSync(new URL(`../../migrations/${name}`, import.meta.url), 'utf8'))
     .join('\n')
     .split(/\r?\n/)) {
@@ -266,6 +268,229 @@ describe('FCM delivery and privacy', () => {
     expect(sends).toHaveLength(0);
     expect((await pending())?.state).toBe('skipped');
   });
+});
+
+describe('private study reminder delivery', () => {
+  const studyNow = new Date('2026-12-07T02:45:00.000Z');
+  async function queueStudy(change?: (data: StudyData) => void) {
+    const data = createStudySeed();
+    change?.(data);
+    await env.DB.prepare('DELETE FROM notifications').run();
+    await env.DB.prepare(
+      'INSERT INTO study_documents(user_id,data_json,version,updated_at) VALUES(?,?,1,?)',
+    )
+      .bind('alice', JSON.stringify(data), studyNow.toISOString())
+      .run();
+    await env.DB.prepare(
+      `INSERT INTO notifications(id,user_id,plan_id,kind,title,body,created_at,next_attempt_at,dedupe_key,study_lesson_id,study_date,study_version)
+      VALUES(?,'alice',NULL,'reminder','DayPact','PRIVATE QUEUED CONTENT',?,?,?,?,?,1)`,
+    )
+      .bind(
+        notificationId,
+        studyNow.toISOString(),
+        studyNow.toISOString(),
+        notificationId,
+        data.lessons[0].id,
+        '2026-12-07',
+      )
+      .run();
+    return data;
+  }
+  it.each(['ru', 'kk'] as const)(
+    'sends a generic %s reminder scoped to its recipient and study date',
+    async (locale) => {
+      const data = await queueStudy((value) => {
+        value.lessons[0].format = 'campus';
+        value.lessons[0].room = 'PRIVATE CLASSROOM';
+      });
+      await env.DB.prepare('UPDATE users SET settings_json=? WHERE uid=?')
+        .bind(
+          JSON.stringify({
+            ...DEFAULT_SETTINGS,
+            locale,
+            quietStart: '00:00',
+            quietEnd: '00:00',
+          }),
+          'alice',
+        )
+        .run();
+      expect((await deliverNotifications(env, studyNow)).delivered).toBe(1);
+      expect(sends).toHaveLength(1);
+      expect(sends[0].data).toMatchObject({
+        recipientUid: 'alice',
+        notificationId,
+        planId: '',
+        studyDate: '2026-12-07',
+      });
+      expect(sends[0].webpush.notification.title).toBe('DayPact');
+      expect(sends[0].webpush.notification.body).toBe(
+        locale === 'ru'
+          ? 'Скоро занятие. Открой расписание.'
+          : 'Сабақ жақында басталады. Кестеңді аш.',
+      );
+      expect(sends[0].webpush.headers).toEqual({ TTL: '900', Urgency: 'normal' });
+      expect(sends[0].webpush.fcm_options.link).toBe('https://daypact.example/?study=2026-12-07');
+      expect(sends[0].webpush.notification.data.url).toBe(sends[0].webpush.fcm_options.link);
+      const serialized = JSON.stringify(sends[0]);
+      expect(serialized).not.toContain('PRIVATE');
+      expect(serialized).not.toContain(data.lessons[0].title);
+      expect(serialized).not.toContain(data.lessons[0].teacher);
+      expect(serialized).not.toContain('alice@private.invalid');
+      expect(await pending()).toMatchObject({ state: 'delivered', attempts: 1 });
+    },
+  );
+  it('includes only the opted-in classroom and time, with TTL bounded by lesson start', async () => {
+    const data = await queueStudy((value) => {
+      value.term.roomInPush = true;
+      value.lessons[0].format = 'campus';
+      value.lessons[0].room = 'TEST-A42';
+    });
+    await deliverNotifications(env, new Date(studyNow.getTime() + 300_000));
+    expect(sends).toHaveLength(1);
+    expect(sends[0].webpush.notification.body).toBe('08:00 · TEST-A42');
+    expect(sends[0].webpush.headers.TTL).toBe('600');
+    expect(JSON.stringify(sends[0])).not.toContain(data.lessons[0].title);
+    expect(JSON.stringify(sends[0])).not.toContain(data.lessons[0].teacher);
+  });
+  it('labels an online lesson without exposing its private meeting URL', async () => {
+    await queueStudy((value) => {
+      value.term.roomInPush = true;
+      value.lessons[0].url = 'https://university.example/private-lesson';
+    });
+    await deliverNotifications(env, studyNow);
+    expect(sends[0].webpush.notification.body).toBe('08:00 · Онлайн');
+    expect(JSON.stringify(sends[0])).not.toContain('private-lesson');
+  });
+  it.each([
+    'stale version',
+    'missing document',
+    'cancelled occurrence',
+    'disabled reminders',
+    'holiday',
+    'lesson started',
+  ])('skips %s without contacting the messaging provider', async (reason) => {
+    const data = await queueStudy();
+    if (reason === 'missing document') await env.DB.prepare('DELETE FROM study_documents').run();
+    else if (reason === 'stale version')
+      await env.DB.prepare('UPDATE study_documents SET version=2').run();
+    else if (reason === 'cancelled occurrence') {
+      const first = data.lessons[0];
+      data.overrides.push({
+        lessonId: first.id,
+        date: '2026-12-07',
+        cancelled: true,
+        startTime: first.startTime,
+        endTime: first.endTime,
+        room: first.room,
+        campus: first.campus,
+        format: first.format,
+        url: first.url,
+        note: 'Cancelled',
+      });
+    } else if (reason === 'disabled reminders') data.term.remindMinutes = -1;
+    else if (reason === 'holiday')
+      data.term.holidays.push({ date: '2026-12-07', title: 'No classes' });
+    if (['cancelled occurrence', 'disabled reminders', 'holiday'].includes(reason))
+      await env.DB.prepare('UPDATE study_documents SET data_json=? WHERE user_id=?')
+        .bind(JSON.stringify(data), 'alice')
+        .run();
+    const when = reason === 'lesson started' ? new Date('2026-12-07T03:00:00.000Z') : studyNow;
+    expect((await deliverNotifications(env, when)).delivered).toBe(0);
+    expect(sends).toHaveLength(0);
+    expect((await pending())?.state).toBe('skipped');
+  });
+  it('rechecks the document version after obtaining provider authorization', async () => {
+    await queueStudy((value) => {
+      value.term.roomInPush = true;
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: RequestInfo | URL) => {
+        if (String(url).startsWith('https://oauth2.googleapis.com/token')) {
+          await env.DB.prepare('UPDATE study_documents SET version=2').run();
+          return Response.json({ access_token: 'test-oauth-token', expires_in: 3600 });
+        }
+        throw new Error('FCM must not receive superseded timetable data');
+      }),
+    );
+    expect((await deliverNotifications(env, studyNow)).delivered).toBe(0);
+    expect((await pending())?.state).toBe('skipped');
+  });
+  it('rechecks the document version between lease acquisition and device selection', async () => {
+    await queueStudy((value) => {
+      value.term.roomInPush = true;
+    });
+    let changed = false;
+    const originalDb = env.DB;
+    const guardedDb = new Proxy(originalDb, {
+      get(target, property) {
+        if (property !== 'prepare') return Reflect.get(target, property);
+        return (query: string) => {
+          const prepared = target.prepare(query);
+          if (!query.includes('SELECT token FROM push_tokens')) return prepared;
+          return new Proxy(prepared, {
+            get(statement, key) {
+              if (key !== 'bind') return Reflect.get(statement, key);
+              return (...values: unknown[]) => {
+                const bound = statement.bind(...values);
+                return new Proxy(bound, {
+                  get(executable, operation) {
+                    if (operation !== 'all') return Reflect.get(executable, operation);
+                    return async () => {
+                      changed = true;
+                      await originalDb.prepare('UPDATE study_documents SET version=2').run();
+                      return executable.all();
+                    };
+                  },
+                });
+              };
+            },
+          });
+        };
+      },
+    });
+    expect((await deliverNotifications({ ...env, DB: guardedDb }, studyNow)).delivered).toBe(0);
+    expect(changed).toBe(true);
+    expect(sends).toHaveLength(0);
+    expect((await pending())?.state).toBe('skipped');
+  });
+  it.each(['schedule changed', 'notifications disabled', 'account suspended'])(
+    'stops further devices after %s during delivery',
+    async (reason) => {
+      await queueStudy((value) => {
+        value.term.roomInPush = true;
+      });
+      await addDevice('device-2');
+      await addDevice('device-3');
+      transport(async () => {
+        if (reason === 'schedule changed')
+          await env.DB.prepare('UPDATE study_documents SET version=2 WHERE user_id=?')
+            .bind('alice')
+            .run();
+        else if (reason === 'notifications disabled')
+          await env.DB.prepare('UPDATE users SET settings_json=? WHERE uid=?')
+            .bind(
+              JSON.stringify({
+                ...DEFAULT_SETTINGS,
+                notificationsEnabled: false,
+                quietStart: '00:00',
+                quietEnd: '00:00',
+              }),
+              'alice',
+            )
+            .run();
+        else
+          await env.DB.prepare(
+            'INSERT INTO user_moderation(user_id,state,updated_at) VALUES(?,?,?)',
+          )
+            .bind('alice', 'suspended', studyNow.toISOString())
+            .run();
+        return Response.json({ name: 'messages/first-device-accepted' });
+      });
+      expect((await deliverNotifications(env, studyNow)).delivered).toBe(1);
+      expect(sends).toHaveLength(1);
+    },
+  );
 });
 
 describe('explicit current-device push diagnostics', () => {

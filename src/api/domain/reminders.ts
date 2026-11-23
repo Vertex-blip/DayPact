@@ -4,12 +4,16 @@ import { nextReminder, isQuiet } from './dates';
 import type { PlanRow } from './repository';
 
 /** Bounded per-minute work. Dedupe + conditional advancement make overlapping Cron invocations safe. */
-export async function enqueueDueReminders(env: Env, now: Date = new Date()): Promise<number> {
+export async function enqueueDueReminders(
+  env: Env,
+  now: Date = new Date(),
+  limit = 5,
+): Promise<number> {
   const timestamp = now.toISOString();
   const due = await env.DB.prepare(
-    'SELECT * FROM plans WHERE next_reminder_at IS NOT NULL AND next_reminder_at<=? ORDER BY next_reminder_at LIMIT 5',
+    'SELECT * FROM plans WHERE next_reminder_at IS NOT NULL AND next_reminder_at<=? ORDER BY next_reminder_at LIMIT ?',
   )
-    .bind(timestamp)
+    .bind(timestamp, Math.max(1, Math.min(5, Math.trunc(limit))))
     .all<PlanRow>();
   let enqueued = 0;
   for (const plan of due.results) {
